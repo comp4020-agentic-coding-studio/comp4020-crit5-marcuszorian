@@ -13,12 +13,15 @@ import {
   TOKEN_CLEARANCE,
 } from "../src/game/config.ts";
 import type {
+  BarLevel,
   GameState,
   Obstacle,
   Pickup,
   PickupKind,
 } from "../src/game/rules.ts";
 import {
+  barFraction,
+  barLevel,
   createGame,
   invulnerable,
   nextRandom,
@@ -359,6 +362,96 @@ describe("the power-up", () => {
     expect(invulnerable(late)).toBe(false);
     expect(late.status).toBe("over");
     expect(late.cause).toBe("collision");
+  });
+});
+
+// The no-tutorial rule, in the two places it is mechanical. Whether the game
+// *teaches itself* is a person's call at the crit and no test replaces that —
+// but the two things the teaching is built out of are orderings, and orderings
+// hold still long enough to assert. See plan/03-feel-and-teaching.md.
+describe("teaching the game without words", () => {
+  /**
+   * Play from cold, pressing every `period` seconds; `0` presses once and then
+   * watches. True if `budget` rose before the runner reached the far side of
+   * the first obstacle — that is, if the game paid out before it punished.
+   */
+  function taughtBeforeFirstObstacle(seed: number, period: number): boolean {
+    let state = step(createGame(seed), { jump: true }, DT);
+    const start = state.budget;
+    let sincePress = 0;
+
+    for (let t = 0; t < 30 && state.status === "running"; t += DT) {
+      sincePress += DT;
+      const press = period > 0 && sincePress >= period;
+      if (press) sincePress = 0;
+      state = step(state, { jump: press }, DT);
+
+      if (state.budget > start) return true;
+      const lead = state.distance + RUNNER_X + RUNNER_W;
+      if (state.obstacles.some((obstacle) => lead > obstacle.x + obstacle.w)) {
+        return false;
+      }
+    }
+    return state.budget > start;
+  }
+
+  // Sweeping the cadence is the whole value of this test. A player pressing at
+  // roughly the jump's own airtime is airborne over every run of ground tokens,
+  // and at 3-6 tokens a run covered less track than one jump — 8% of seeds
+  // reached an obstacle having been taught nothing at all. The first run is now
+  // always the longest one; this is what stops that regressing.
+  const cadences = [0, 0.2, 0.35, 0.5, 0.65, 0.7, 0.75, 0.8, 1, 1.5];
+
+  it("pays out a ground token before the first obstacle, at every press rhythm", () => {
+    for (const period of cadences) {
+      for (let seed = 1; seed <= 120; seed += 1) {
+        // Reported as an object so a failure names the cadence and the seed
+        // rather than saying `false !== true`.
+        expect({ period, seed, taught: taughtBeforeFirstObstacle(seed, period) })
+          .toEqual({ period, seed, taught: true });
+      }
+    }
+  });
+
+  it("starts the bar full, so a pickup is the only thing that fills it", () => {
+    expect(barFraction(createGame(1))).toBe(1);
+  });
+
+  it("moves the bar when a token is collected", () => {
+    // Below the cap, where the bar is not pinned: the pickup-to-bar link is
+    // what teaches "gold is worth taking", so it has to be a visible step.
+    const drained = quiet({ used: START_BUDGET / 2 });
+    const before = barFraction(drained);
+    const taken = play(
+      { ...drained, pickups: [pickupAt("token", at(10))] },
+      0.5,
+    );
+    expect(barFraction(taken)).toBeGreaterThan(before);
+  });
+});
+
+describe("dying dry is legible", () => {
+  it("holds each warning colour long enough to be read", () => {
+    let state = quiet({ seed: 11 });
+    const seen: BarLevel[] = [barLevel(state)];
+    const held = new Map<BarLevel, number>();
+
+    for (let t = 0; t < 300 && state.status === "running"; t += DT) {
+      state = step(state, { jump: false }, DT);
+      const level = barLevel(state);
+      held.set(level, (held.get(level) ?? 0) + DT);
+      if (level !== seen[seen.length - 1]) seen.push(level);
+    }
+
+    expect(state.cause).toBe("drained");
+    // The bar never jumps a colour: you are shown amber, then red, then dead.
+    expect(seen).toEqual(["ok", "warn", "crit"]);
+    // Two seconds is a floor on a person noticing a colour change, not a
+    // tuning number — the balance pass may move the drain, but it may not make
+    // running out of budget a surprise.
+    expect(held.get("warn")).toBeGreaterThan(2);
+    expect(held.get("crit")).toBeGreaterThan(2);
+    expect(barFraction(state)).toBe(0);
   });
 });
 

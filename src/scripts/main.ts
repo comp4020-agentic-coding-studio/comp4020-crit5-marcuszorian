@@ -6,9 +6,6 @@
 // draws it. It never decides anything the simulation could have decided.
 
 import {
-  BAR_CAP,
-  BAR_CRIT,
-  BAR_WARN,
   CARET_BLINK_MS,
   GROUND_DASH,
   GROUND_FRACTION,
@@ -19,8 +16,14 @@ import {
   RUNNER_X,
   WORLD_W,
 } from "../game/config.ts";
-import type { GameState, Pickup } from "../game/rules.ts";
-import { createGame, invulnerable, remainingOf, step } from "../game/rules.ts";
+import type { BarLevel, GameState, Pickup } from "../game/rules.ts";
+import {
+  barFraction,
+  barLevel,
+  createGame,
+  invulnerable,
+  step,
+} from "../game/rules.ts";
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const INK = "#7dfda6";
@@ -147,7 +150,9 @@ function render(
   drawObstacles(paint, state, groundY);
   drawRunner(paint, state, view, groundY);
 
-  if (state.status === "idle") drawCaret(paint, view, groundY);
+  if (state.status === "idle") {
+    drawCaret(paint, view, RUNNER_X + RUNNER_W + 14, groundY, RUNNER_H);
+  }
 
   drawBudget(paint, state);
 
@@ -284,22 +289,30 @@ function drawRunner(
  * The whole tutorial. A terminal cursor blinking beside an idle runner is
  * already the universal "waiting for input" signal, and it is diegetic to the
  * look rather than a label sitting on top of the game.
+ *
+ * `x` is the caret's left edge and `bottom` the line it sits on, so the start
+ * screen can stand one beside the runner and the death screen can stand the
+ * same one under the score.
  */
 function drawCaret(
   paint: CanvasRenderingContext2D,
   view: View,
-  groundY: number,
+  x: number,
+  bottom: number,
+  height: number,
 ): void {
   if (Math.floor(view.now / CARET_BLINK_MS) % 2 === 1) return;
   paint.fillStyle = INK;
-  paint.fillRect(RUNNER_X + RUNNER_W + 14, groundY - RUNNER_H, 16, RUNNER_H);
+  paint.fillRect(x, bottom - height, 16, height);
 }
 
+/** One colour per bar level. The level itself is decided in `rules.ts`. */
+const BAR_INK: Record<BarLevel, string> = { ok: INK, warn: WARN, crit: CRIT };
+
 /**
- * Fixed-cap bar, not a percentage of budget: at a constant cap every pickup is
- * the same visible bump all run, so the pickup-to-bar link keeps teaching.
- * Headroom above the cap still counts toward budget and speed, it just isn't
- * drawn.
+ * Wide, high-contrast and the only thing at the top of the screen: dying dry
+ * has to be something the player watched happen. How full it is and what colour
+ * it is are both `rules.ts`'s answers — this only paints them.
  */
 function drawBudget(
   paint: CanvasRenderingContext2D,
@@ -308,12 +321,12 @@ function drawBudget(
   const margin = 40;
   const width = WORLD_W - margin * 2;
   const height = 22;
-  const fraction = Math.max(0, Math.min(1, remainingOf(state) / BAR_CAP));
+  const fraction = barFraction(state);
 
   paint.fillStyle = DIM;
   paint.fillRect(margin, margin, width, height);
 
-  paint.fillStyle = fraction <= BAR_CRIT ? CRIT : fraction <= BAR_WARN ? WARN : INK;
+  paint.fillStyle = BAR_INK[barLevel(state)];
   paint.fillRect(margin, margin, width * fraction, height);
 
   paint.fillStyle = INK;
@@ -343,4 +356,10 @@ function drawEnding(
   paint.fillStyle = FADED;
   paint.font = FONT;
   paint.fillText(`BEST ${Math.floor(view.best)}`, WORLD_W / 2, midY + 64);
+
+  // The same caret that invited the first press invites the next one. Without
+  // it the death screen is two numbers and no offer, and a cold player has
+  // nothing telling them the run is repeatable — the one thing the ending has
+  // to communicate, and the only one it cannot say in words.
+  drawCaret(paint, view, WORLD_W / 2 - 8, midY + 136, 30);
 }

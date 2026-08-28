@@ -111,7 +111,12 @@ export const HIGH_TOKEN_LEAD = 46;
 /** Chance an obstacle (after the first) carries a high token just past it. */
 export const HIGH_TOKEN_CHANCE = 0.5;
 
-/** Ground tokens arrive in runs of this many, evenly spaced. */
+/**
+ * Ground tokens arrive in runs of this many, evenly spaced. The first run of
+ * the game is always `TOKEN_RUN_MAX` long — it is the teaching one, and a run
+ * has to span more track than one jump covers or a player still mashing the
+ * button flies over it. See `spawn` in `rules.ts`.
+ */
 export const TOKEN_RUN_MIN = 3;
 export const TOKEN_RUN_MAX = 6;
 export const TOKEN_SPACING = 46;
@@ -164,6 +169,11 @@ export const FIRST_OBSTACLE_X = 1500;
  * The first run of ground tokens, well before the first obstacle, directly in
  * the runner's path. It is collected by accident, and the bar jumps — "these
  * are good" is taught before anything punishes you.
+ *
+ * Just past where the opening hop lands (207 units of track), so the press that
+ * starts the game does not carry the runner over its own first lesson. The run
+ * is also the longest the game spawns, which is what makes the lesson land at
+ * every press rhythm rather than most of them.
  */
 export const FIRST_TOKEN_X = 420;
 

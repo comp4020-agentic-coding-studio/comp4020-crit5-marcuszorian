@@ -9,6 +9,9 @@
 // felt while playing can be reproduced instead of described.
 
 import {
+  BAR_CAP,
+  BAR_CRIT,
+  BAR_WARN,
   BOOST,
   DRAIN,
   FIRST_OBSTACLE_X,
@@ -134,6 +137,33 @@ export function nextRandom(seed: number): { value: number; seed: number } {
 /** What the budget bar shows. The run ends when this reaches zero. */
 export function remainingOf(state: GameState): number {
   return state.budget - state.used;
+}
+
+/** The three states of the budget bar. Colour is `main.ts`'s business. */
+export type BarLevel = "ok" | "warn" | "crit";
+
+/**
+ * How much of the bar is filled. A fixed cap, not `remaining / budget`: at a
+ * constant cap every pickup is the same visible bump for the whole run, so the
+ * pickup-to-bar link keeps teaching. Drawn as a percentage of a growing budget,
+ * a late-game token would move the bar by nothing — exactly when the feedback
+ * matters most. Headroom above the cap still counts toward speed; it just pins
+ * the bar at full.
+ */
+export function barFraction(state: GameState): number {
+  return Math.max(0, Math.min(1, remainingOf(state) / BAR_CAP));
+}
+
+/**
+ * Which of the three colours the bar is showing. Derived here rather than in
+ * the renderer so that "the bar had changed colour before you died" is a
+ * property a test can hold, instead of a claim about a canvas nobody can read.
+ */
+export function barLevel(state: GameState): BarLevel {
+  const fraction = barFraction(state);
+  if (fraction <= BAR_CRIT) return "crit";
+  if (fraction <= BAR_WARN) return "warn";
+  return "ok";
 }
 
 /**
@@ -400,8 +430,17 @@ function spawn(state: GameState, distance: number): Spawned {
   while (nextTokenAt <= horizon) {
     const count = nextRandom(seed);
     seed = count.seed;
+    // The first run is always the longest one, because it is the only place the
+    // game gets to teach "gold is worth taking" before anything punishes you.
+    // A short run spans less track than one jump covers (6 tokens span 230
+    // units against a 207-unit airtime), so a player still mashing the button
+    // sails over the whole thing and meets the first obstacle having collected
+    // nothing — measured at 8% of seeds for a ~0.75s press cadence. The draw
+    // above happens either way, so the seed sequence does not fork here.
     const run =
-      TOKEN_RUN_MIN + Math.floor(count.value * (TOKEN_RUN_MAX - TOKEN_RUN_MIN + 1));
+      nextTokenAt === FIRST_TOKEN_X
+        ? TOKEN_RUN_MAX
+        : TOKEN_RUN_MIN + Math.floor(count.value * (TOKEN_RUN_MAX - TOKEN_RUN_MIN + 1));
 
     let x = nextTokenAt;
     for (let i = 0; i < run; i += 1) {
