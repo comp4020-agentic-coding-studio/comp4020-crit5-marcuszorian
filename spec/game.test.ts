@@ -1,17 +1,28 @@
 import { describe, expect, it } from "vitest";
 import {
+  BOOST,
   GRAVITY,
+  HIGH_TOKEN_LEAD,
+  INVULN_MS,
   JUMP_V,
   OBSTACLE_H,
   OBSTACLE_W,
   RUNNER_W,
   RUNNER_X,
   START_BUDGET,
+  TOKEN_CLEARANCE,
 } from "../src/game/config.ts";
-import type { GameState } from "../src/game/rules.ts";
+import type {
+  GameState,
+  Obstacle,
+  Pickup,
+  PickupKind,
+} from "../src/game/rules.ts";
 import {
   createGame,
+  invulnerable,
   nextRandom,
+  pickupAt,
   remainingOf,
   speedFor,
   step,
@@ -42,21 +53,34 @@ const airTime = (2 * JUMP_V) / -GRAVITY;
 const latestClearingJump = riseTimeTo(OBSTACLE_H);
 
 /**
- * A run already underway, with exactly one obstacle and spawning switched off,
- * so nothing but the obstacle under test can end it.
- *
- * `gapAhead` is clear track between the runner's leading edge and the
- * obstacle, which makes contact happen at exactly `gapAhead / speed` seconds.
+ * A run already underway with every spawner switched off, so nothing but what
+ * the test puts on the track can change the outcome.
  */
-function oneObstacleAhead(gapAhead: number): GameState {
+function quiet(overrides: Partial<GameState> = {}): GameState {
   return {
     ...createGame(1),
     status: "running",
-    nextSpawnAt: Number.POSITIVE_INFINITY,
-    obstacles: [
-      { x: RUNNER_X + RUNNER_W + gapAhead, w: OBSTACLE_W, h: OBSTACLE_H },
-    ],
+    nextObstacleAt: Number.POSITIVE_INFINITY,
+    nextTokenAt: Number.POSITIVE_INFINITY,
+    nextPowerAt: Number.POSITIVE_INFINITY,
+    ...overrides,
   };
+}
+
+/** Clear track between the runner's leading edge and world x. */
+function at(gapAhead: number): number {
+  return RUNNER_X + RUNNER_W + gapAhead;
+}
+
+/**
+ * One obstacle on an empty track. `gapAhead` is clear track between the
+ * runner's leading edge and the obstacle, which makes contact happen at exactly
+ * `gapAhead / speed` seconds.
+ */
+function oneObstacleAhead(gapAhead: number): GameState {
+  return quiet({
+    obstacles: [{ x: at(gapAhead), w: OBSTACLE_W, h: OBSTACLE_H }],
+  });
 }
 
 /** Advance for `seconds`, pressing jump on the first frame at or after each of `jumpAt`. */
@@ -118,12 +142,7 @@ describe("endings", () => {
   });
 
   it("running the budget dry ends the run, with nothing to collide with", () => {
-    const thin: GameState = {
-      ...createGame(7),
-      status: "running",
-      nextSpawnAt: Number.POSITIVE_INFINITY,
-      budget: START_BUDGET / 10,
-    };
+    const thin = quiet({ seed: 7, budget: START_BUDGET / 10 });
     const end = play(thin, 60);
     expect(end.obstacles).toHaveLength(0);
     expect(end.status).toBe("over");
@@ -177,6 +196,169 @@ describe("speed", () => {
     for (let budget = 0; budget < 20000; budget += 250) {
       expect(speedFor(budget + 250)).toBeGreaterThan(speedFor(budget));
     }
+  });
+});
+
+// The pickups, asserted as relationships. Nothing below names a token's value
+// or a token's height: what has to stay true is that collecting raises the
+// ceiling, that raising the ceiling is what makes the run faster, and that the
+// high ones cost a jump.
+describe("tokens", () => {
+  const speed = speedFor(START_BUDGET);
+  const gap = speed * airTime * 2;
+  const contact = gap / speed;
+  const window = contact + airTime * 2;
+
+  /** Run past one pickup, optionally jumping so as to be at the apex on contact. */
+  function collectRun(kind: PickupKind, jump: boolean): GameState {
+    const start = quiet({ pickups: [pickupAt(kind, at(gap))] });
+    return play(start, window, jump ? [contact - airTime / 2] : []);
+  }
+
+  it("a ground token is collected by running through it", () => {
+    const taken = collectRun("token", false);
+    expect(taken.pickups).toHaveLength(0);
+    expect(taken.status).toBe("running");
+  });
+
+  it("collecting raises the budget, and so the speed of the rest of the run", () => {
+    const taken = collectRun("token", false);
+    expect(taken.budget).toBeGreaterThan(START_BUDGET);
+    expect(speedFor(taken.budget)).toBeGreaterThan(speedFor(START_BUDGET));
+  });
+
+  it("a high token cannot be reached from the ground", () => {
+    // The budget is the tell, not the array: an uncollected pickup is culled
+    // once it has scrolled past, exactly like a collected one.
+    expect(collectRun("high", false).budget).toBe(START_BUDGET);
+  });
+
+  it("a high token is collected by jumping through it", () => {
+    const taken = collectRun("high", true);
+    expect(taken.pickups).toHaveLength(0);
+    expect(taken.budget).toBeGreaterThan(START_BUDGET);
+  });
+
+  // The interesting shape, and the one thing that could silently stop working
+  // when the physics or the heights are tuned: a high token hanging just past
+  // an obstacle, exactly as the spawner pairs them.
+  it("one jump can clear an obstacle and take the high token behind it", () => {
+    const obstacleX = at(gap);
+    const paired = quiet({
+      obstacles: [{ x: obstacleX, w: OBSTACLE_W, h: OBSTACLE_H }],
+      pickups: [pickupAt("high", obstacleX + OBSTACLE_W + HIGH_TOKEN_LEAD)],
+    });
+
+    // Scan the approach rather than naming a timing: what has to hold is that
+    // some single jump takes both, and that not every safe jump does — the
+    // token has to stay a decision rather than a bonus for surviving.
+    const survived: number[] = [];
+    const tookBoth: number[] = [];
+    for (let t = contact - airTime; t < contact; t += DT) {
+      const end = play(paired, window, [t]);
+      if (end.status !== "running") continue;
+      survived.push(t);
+      if (end.budget > START_BUDGET) tookBoth.push(t);
+    }
+
+    expect(tookBoth.length).toBeGreaterThan(0);
+    expect(survived.length).toBeGreaterThan(tookBoth.length);
+  });
+
+  it("a high token is worth more than a ground token", () => {
+    const ground = collectRun("token", false).budget - START_BUDGET;
+    const high = collectRun("high", true).budget - START_BUDGET;
+    expect(high).toBeGreaterThan(ground);
+  });
+});
+
+describe("the track", () => {
+  /** Clear world units between a pickup and an obstacle, on whichever side. */
+  function gapBetween(pickup: Pickup, obstacle: Obstacle): number {
+    return pickup.x > obstacle.x
+      ? pickup.x - (obstacle.x + obstacle.w)
+      : obstacle.x - (pickup.x + pickup.w);
+  }
+
+  // A ground token jammed against a wall is uncollectable and reads as a bug
+  // rather than a choice — and the obstacle it has to clear may not have been
+  // created yet at the moment the token is placed, which is how it first got
+  // through. Sweeping the two cursors past each other covers both orders.
+  it("keeps reachable pickups clear of obstacles, spawned or pending", () => {
+    for (let obstacleAt = 900; obstacleAt < 1700; obstacleAt += 37) {
+      for (let tokenAt = 900; tokenAt < 1400; tokenAt += 29) {
+        const track = play(
+          quiet({
+            nextObstacleAt: obstacleAt,
+            nextTokenAt: tokenAt,
+            nextPowerAt: tokenAt + 200,
+          }),
+          1.5,
+        );
+
+        for (const pickup of track.pickups) {
+          // High tokens hang above every obstacle, so they are exempt.
+          if (pickup.kind === "high") continue;
+          for (const obstacle of track.obstacles) {
+            expect(gapBetween(pickup, obstacle)).toBeGreaterThanOrEqual(
+              TOKEN_CLEARANCE,
+            );
+          }
+        }
+      }
+    }
+  });
+});
+
+describe("the power-up", () => {
+  const speed = speedFor(START_BUDGET);
+  const boosted = speedFor(START_BUDGET + BOOST);
+  const invuln = INVULN_MS / 1000;
+  const gap = speed * airTime * 2;
+  const contact = gap / speed;
+
+  /**
+   * A power-up, then an obstacle `after` seconds of post-pickup travel beyond
+   * it — so `after` is measured in shield time, whatever the shield lasts.
+   */
+  function run(after: number, withPower: boolean): GameState {
+    const powerX = at(gap);
+    return play(
+      quiet({
+        pickups: withPower ? [pickupAt("power", powerX)] : [],
+        obstacles: [
+          { x: powerX + boosted * after, w: OBSTACLE_W, h: OBSTACLE_H },
+        ],
+      }),
+      contact + after * 2 + airTime,
+    );
+  }
+
+  it("raises the budget, and so the speed, like every other pickup", () => {
+    const taken = play(
+      quiet({ pickups: [pickupAt("power", at(gap))] }),
+      contact + airTime,
+    );
+    expect(taken.budget).toBeGreaterThan(START_BUDGET);
+    expect(speedFor(taken.budget)).toBeGreaterThan(speedFor(START_BUDGET));
+  });
+
+  it("makes survivable a collision that otherwise ends the run", () => {
+    expect(run(invuln / 2, false).cause).toBe("collision");
+
+    const shielded = run(invuln / 2, true);
+    expect(shielded.status).toBe("running");
+    expect(shielded.cause).toBeNull();
+    // Destroyed rather than ignored: an obstacle the runner is still inside
+    // when the shield expires must not kill them for a hit already survived.
+    expect(shielded.obstacles).toHaveLength(0);
+  });
+
+  it("stops shielding after INVULN_MS", () => {
+    const late = run(invuln * 1.5, true);
+    expect(invulnerable(late)).toBe(false);
+    expect(late.status).toBe("over");
+    expect(late.cause).toBe("collision");
   });
 });
 

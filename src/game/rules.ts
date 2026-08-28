@@ -9,13 +9,28 @@
 // felt while playing can be reproduced instead of described.
 
 import {
+  BOOST,
   DRAIN,
   FIRST_OBSTACLE_X,
+  FIRST_POWER_X,
+  FIRST_TOKEN_X,
   GRAVITY,
   GROUND_EPS,
+  HIGH_TOKEN_CHANCE,
+  HIGH_TOKEN_H,
+  HIGH_TOKEN_LEAD,
+  HIGH_TOKEN_VALUE,
+  HIGH_TOKEN_W,
+  HIGH_TOKEN_Y,
+  INVULN_MS,
   JUMP_V,
   OBSTACLE_H,
   OBSTACLE_W,
+  POWER_GAP_MAX,
+  POWER_GAP_MIN,
+  POWER_H,
+  POWER_W,
+  POWER_Y,
   RUNNER_H,
   RUNNER_W,
   RUNNER_X,
@@ -24,6 +39,16 @@ import {
   SPEED_BASE,
   SPEED_PER_BUDGET,
   START_BUDGET,
+  TOKEN_CLEARANCE,
+  TOKEN_GAP_MAX,
+  TOKEN_GAP_MIN,
+  TOKEN_H,
+  TOKEN_RUN_MAX,
+  TOKEN_RUN_MIN,
+  TOKEN_SPACING,
+  TOKEN_VALUE,
+  TOKEN_W,
+  TOKEN_Y,
   WORLD_W,
 } from "./config.ts";
 
@@ -47,6 +72,17 @@ export interface Obstacle {
   readonly h: number;
 }
 
+/**
+ * `token` runs along the ground and is free; `high` needs a jump and is worth
+ * more; `power` is rare and grants invincibility plus a large budget boost.
+ */
+export type PickupKind = "token" | "high" | "power";
+
+/** A pickup is its own collision box — position and size in world units. */
+export interface Pickup extends Box {
+  readonly kind: PickupKind;
+}
+
 export interface GameState {
   readonly status: Status;
   /** RNG state. Advanced by every draw; carried into the next run on restart. */
@@ -60,12 +96,19 @@ export interface GameState {
   /** Vertical velocity, world units per second. */
   readonly vy: number;
   readonly obstacles: readonly Obstacle[];
+  readonly pickups: readonly Pickup[];
   /** Tokens consumed. Rises with distance, and is the score. */
   readonly used: number;
   /** The ceiling. Starts at `START_BUDGET`; only pickups raise it. */
   readonly budget: number;
   /** Absolute world x of the next obstacle to spawn. */
-  readonly nextSpawnAt: number;
+  readonly nextObstacleAt: number;
+  /** Absolute world x where the next run of ground tokens begins. */
+  readonly nextTokenAt: number;
+  /** Absolute world x of the next power-up. */
+  readonly nextPowerAt: number;
+  /** `elapsed` at which invincibility ends. Zero when it was never granted. */
+  readonly invulnUntil: number;
   readonly cause: DeathCause | null;
 }
 
@@ -131,6 +174,39 @@ export function grounded(state: GameState): boolean {
   return state.y <= GROUND_EPS;
 }
 
+/** True while a power-up is still shielding the runner. */
+export function invulnerable(state: GameState): boolean {
+  return state.elapsed < state.invulnUntil;
+}
+
+/**
+ * A pickup of `kind` with its left edge at world `x`. The one place a pickup's
+ * geometry is decided, so the spawner, the renderer and the tests all agree
+ * about what "a high token" is without any of them naming a number.
+ */
+export function pickupAt(kind: PickupKind, x: number): Pickup {
+  switch (kind) {
+    case "token":
+      return { kind, x, y: TOKEN_Y, w: TOKEN_W, h: TOKEN_H };
+    case "high":
+      return { kind, x, y: HIGH_TOKEN_Y, w: HIGH_TOKEN_W, h: HIGH_TOKEN_H };
+    case "power":
+      return { kind, x, y: POWER_Y, w: POWER_W, h: POWER_H };
+  }
+}
+
+/** Budget granted by collecting one. Every pickup pays in the same currency. */
+export function pickupValue(kind: PickupKind): number {
+  switch (kind) {
+    case "token":
+      return TOKEN_VALUE;
+    case "high":
+      return HIGH_TOKEN_VALUE;
+    case "power":
+      return BOOST;
+  }
+}
+
 // --- the reducer -----------------------------------------------------------
 
 export function createGame(seed: number): GameState {
@@ -142,9 +218,13 @@ export function createGame(seed: number): GameState {
     y: 0,
     vy: 0,
     obstacles: [],
+    pickups: [],
     used: 0,
     budget: START_BUDGET,
-    nextSpawnAt: FIRST_OBSTACLE_X,
+    nextObstacleAt: FIRST_OBSTACLE_X,
+    nextTokenAt: FIRST_TOKEN_X,
+    nextPowerAt: FIRST_POWER_X,
+    invulnUntil: 0,
     cause: null,
   };
 }
@@ -194,7 +274,7 @@ function advance(state: GameState, input: Input, dt: number): GameState {
   const distance = state.distance + travelled;
   const used = state.used + travelled * DRAIN;
 
-  const next: GameState = {
+  const moved: GameState = {
     ...state,
     elapsed: state.elapsed + dt,
     distance,
@@ -204,10 +284,29 @@ function advance(state: GameState, input: Input, dt: number): GameState {
     ...spawn(state, distance),
   };
 
-  // Collision first: hitting something is the more legible of the two endings,
-  // and on the frame where both happen it is the one the player saw.
-  if (hitsAnything(next)) {
-    return { ...next, status: "over", cause: "collision" };
+  // Collect before colliding, so a power-up taken on the same frame as the
+  // obstacle behind it still shields that obstacle. The generous reading of an
+  // ambiguous frame is the one the player will believe they earned.
+  const next = { ...moved, ...collect(moved) };
+
+  const runner = runnerBox(next);
+  const struck = next.obstacles.filter((obstacle) =>
+    overlaps(runner, obstacleBox(obstacle)),
+  );
+
+  if (struck.length > 0) {
+    // Collision first: hitting something is the more legible of the two
+    // endings, and on the frame where both happen it is the one the player saw.
+    if (!invulnerable(next)) {
+      return { ...next, status: "over", cause: "collision" };
+    }
+    // Shielded, so the obstacle is destroyed rather than ignored. Ignoring it
+    // would let the shield expire while the runner is still inside the box,
+    // killing them for a hit they already survived.
+    return {
+      ...next,
+      obstacles: next.obstacles.filter((obstacle) => !struck.includes(obstacle)),
+    };
   }
 
   if (remainingOf(next) <= 0) {
@@ -217,35 +316,135 @@ function advance(state: GameState, input: Input, dt: number): GameState {
   return next;
 }
 
-function hitsAnything(state: GameState): boolean {
+/**
+ * Take everything the runner is touching. Pickups pay into `budget`, never into
+ * `used`, so collecting raises the ceiling and — through `speedFor` — the speed
+ * of the rest of the run. Every reward is also a difficulty increase.
+ */
+function collect(
+  state: GameState,
+): Pick<GameState, "pickups" | "budget" | "invulnUntil"> {
   const runner = runnerBox(state);
-  return state.obstacles.some((obstacle) =>
-    overlaps(runner, obstacleBox(obstacle)),
-  );
+  const pickups: Pickup[] = [];
+  let budget = state.budget;
+  let invulnUntil = state.invulnUntil;
+
+  for (const pickup of state.pickups) {
+    if (!overlaps(runner, pickup)) {
+      pickups.push(pickup);
+      continue;
+    }
+    budget += pickupValue(pickup.kind);
+    if (pickup.kind === "power") {
+      invulnUntil = state.elapsed + INVULN_MS / 1000;
+    }
+  }
+
+  return { pickups, budget, invulnUntil };
 }
 
+type Spawned = Pick<
+  GameState,
+  "obstacles" | "pickups" | "nextObstacleAt" | "nextTokenAt" | "nextPowerAt" | "seed"
+>;
+
 /**
- * Top up the track ahead and drop what has gone past. Obstacles are created at
- * `distance + WORLD_W`, one screen-width away, so they are never seen to
- * appear.
+ * Top up the track ahead and drop what has gone past. Everything is created at
+ * `distance + WORLD_W`, one screen-width away, so nothing is ever seen to
+ * appear. Each cursor is an absolute world x, so the track is a function of the
+ * seed and the distance travelled and nothing else.
+ *
+ * A cursor of `Infinity` disables its spawner, which is how a test isolates one
+ * obstacle on an otherwise empty track.
  */
-function spawn(
-  state: GameState,
-  distance: number,
-): Pick<GameState, "obstacles" | "nextSpawnAt" | "seed"> {
+function spawn(state: GameState, distance: number): Spawned {
   const horizon = distance + WORLD_W;
   let seed = state.seed;
-  let nextSpawnAt = state.nextSpawnAt;
+
   const obstacles = state.obstacles.filter(
     (obstacle) => obstacle.x + obstacle.w >= distance,
   );
+  const pickups = state.pickups.filter(
+    (pickup) => pickup.x + pickup.w >= distance,
+  );
 
-  while (nextSpawnAt <= horizon) {
-    obstacles.push({ x: nextSpawnAt, w: OBSTACLE_W, h: OBSTACLE_H });
-    const roll = nextRandom(seed);
-    seed = roll.seed;
-    nextSpawnAt += SPAWN_GAP_MIN + roll.value * (SPAWN_GAP_MAX - SPAWN_GAP_MIN);
+  let nextObstacleAt = state.nextObstacleAt;
+  while (nextObstacleAt <= horizon) {
+    const x = nextObstacleAt;
+    obstacles.push({ x, w: OBSTACLE_W, h: OBSTACLE_H });
+
+    // The shape the whole design is built on: a high token hanging just past an
+    // obstacle, so one well-timed jump takes both and a greedy one kills you.
+    // Never on the first obstacle — that one is only ever "jump this".
+    const carries = nextRandom(seed);
+    seed = carries.seed;
+    if (x > FIRST_OBSTACLE_X && carries.value < HIGH_TOKEN_CHANCE) {
+      pickups.push(pickupAt("high", x + OBSTACLE_W + HIGH_TOKEN_LEAD));
+    }
+
+    const gap = nextRandom(seed);
+    seed = gap.seed;
+    nextObstacleAt = x + SPAWN_GAP_MIN + gap.value * (SPAWN_GAP_MAX - SPAWN_GAP_MIN);
   }
 
-  return { obstacles, nextSpawnAt, seed };
+  // Tokens reach a little past the horizon, and the next obstacle has not been
+  // created yet at the moment they are placed — so clearance is measured
+  // against the obstacle the cursor is already committed to as well as the ones
+  // on the track. Without it, tokens turn up jammed against a wall that appears
+  // a frame later.
+  const committed: readonly Obstacle[] = Number.isFinite(nextObstacleAt)
+    ? [...obstacles, { x: nextObstacleAt, w: OBSTACLE_W, h: OBSTACLE_H }]
+    : obstacles;
+
+  let nextTokenAt = state.nextTokenAt;
+  while (nextTokenAt <= horizon) {
+    const count = nextRandom(seed);
+    seed = count.seed;
+    const run =
+      TOKEN_RUN_MIN + Math.floor(count.value * (TOKEN_RUN_MAX - TOKEN_RUN_MIN + 1));
+
+    let x = nextTokenAt;
+    for (let i = 0; i < run; i += 1) {
+      const token = pickupAt("token", x);
+      // A ground token inside an obstacle is uncollectable, and looks like a
+      // bug rather than a choice. Skip it; the run just has a hole in it.
+      if (clearOfObstacles(token, committed)) pickups.push(token);
+      x += TOKEN_SPACING;
+    }
+
+    const gap = nextRandom(seed);
+    seed = gap.seed;
+    nextTokenAt =
+      x - TOKEN_SPACING + TOKEN_GAP_MIN + gap.value * (TOKEN_GAP_MAX - TOKEN_GAP_MIN);
+  }
+
+  let nextPowerAt = state.nextPowerAt;
+  while (nextPowerAt <= horizon) {
+    const power = pickupAt("power", nextPowerAt);
+    // Nudged clear of an obstacle rather than skipped: one every few tens of
+    // seconds is too rare to drop because the dice put it inside a wall.
+    if (!clearOfObstacles(power, committed)) {
+      nextPowerAt += TOKEN_CLEARANCE;
+      continue;
+    }
+    pickups.push(power);
+    const gap = nextRandom(seed);
+    seed = gap.seed;
+    nextPowerAt += POWER_GAP_MIN + gap.value * (POWER_GAP_MAX - POWER_GAP_MIN);
+  }
+
+  return { obstacles, pickups, nextObstacleAt, nextTokenAt, nextPowerAt, seed };
+}
+
+function clearOfObstacles(
+  pickup: Pickup,
+  obstacles: readonly Obstacle[],
+): boolean {
+  const room: Box = {
+    x: pickup.x - TOKEN_CLEARANCE,
+    y: pickup.y,
+    w: pickup.w + TOKEN_CLEARANCE * 2,
+    h: pickup.h,
+  };
+  return !obstacles.some((obstacle) => overlaps(room, obstacleBox(obstacle)));
 }

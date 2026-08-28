@@ -19,16 +19,23 @@ import {
   RUNNER_X,
   WORLD_W,
 } from "../game/config.ts";
-import type { GameState } from "../game/rules.ts";
-import { createGame, remainingOf, step } from "../game/rules.ts";
+import type { GameState, Pickup } from "../game/rules.ts";
+import { createGame, invulnerable, remainingOf, step } from "../game/rules.ts";
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const INK = "#7dfda6";
 const FADED = "#4c8f68";
 const DIM = "#1d3527";
 const PAPER = "#05100a";
+// Four colours, four meanings, and nothing borrows another's: green is you and
+// the world, gold is worth taking, red kills you, cyan is the power-up.
 const WARN = "#f2d857";
 const CRIT = "#ff6b57";
+const SHIELD = "#6be3ff";
+/** Milliseconds per phase of the shielded runner's flash. */
+const SHIELD_FLASH_MS = 90;
+/** Drawn size of the power-up, world units. Its collision box is larger. */
+const POWER_ICON = 26;
 const FONT = `600 22px ${MONO}`;
 
 const canvas = document.querySelector<HTMLCanvasElement>("#game");
@@ -136,8 +143,9 @@ function render(
   paint.fillRect(0, 0, WORLD_W, view.worldH);
 
   drawGround(paint, state, view, groundY);
+  drawPickups(paint, state, groundY);
   drawObstacles(paint, state, groundY);
-  drawRunner(paint, state, groundY);
+  drawRunner(paint, state, view, groundY);
 
   if (state.status === "idle") drawCaret(paint, view, groundY);
 
@@ -180,12 +188,95 @@ function drawObstacles(
   }
 }
 
-function drawRunner(
+/**
+ * Both token heights are gold, so "gold is worth taking" is one rule learned on
+ * the first cluster and never re-taught; the shape carries the rest. Squares at
+ * chest height are free, diamonds overhead cost a jump and pay more, and the
+ * power-up is the only thing on screen in a colour nothing else uses.
+ *
+ * Drawing the tokens in the runner's green was the first attempt, and on screen
+ * the avatar and the collectibles read as the same kind of thing.
+ */
+function drawPickups(
   paint: CanvasRenderingContext2D,
   state: GameState,
   groundY: number,
 ): void {
-  paint.fillStyle = state.status === "over" ? DIM : INK;
+  for (const pickup of state.pickups) {
+    const x = pickup.x - state.distance;
+    if (x < -pickup.w || x > WORLD_W) continue;
+    const y = groundY - pickup.y - pickup.h;
+
+    if (pickup.kind === "power") {
+      drawPower(paint, pickup, x, y);
+    } else if (pickup.kind === "high") {
+      drawDiamond(paint, pickup, x, y);
+    } else {
+      paint.fillStyle = WARN;
+      paint.fillRect(x, y, pickup.w, pickup.h);
+    }
+  }
+}
+
+function drawDiamond(
+  paint: CanvasRenderingContext2D,
+  pickup: Pickup,
+  x: number,
+  y: number,
+): void {
+  paint.fillStyle = WARN;
+  paint.beginPath();
+  paint.moveTo(x + pickup.w / 2, y);
+  paint.lineTo(x + pickup.w, y + pickup.h / 2);
+  paint.lineTo(x + pickup.w / 2, y + pickup.h);
+  paint.lineTo(x, y + pickup.h / 2);
+  paint.closePath();
+  paint.fill();
+}
+
+/**
+ * Concentric squares — a reticle, not another token. The icon is drawn small
+ * and centred inside a deliberately larger collision box (see `POWER_Y` and
+ * friends), so the rare pickup is easier to take than it looks. Generous in the
+ * player's favour is invisible; the reverse would be infuriating.
+ */
+function drawPower(
+  paint: CanvasRenderingContext2D,
+  pickup: Pickup,
+  x: number,
+  y: number,
+): void {
+  const size = POWER_ICON;
+  const left = x + (pickup.w - size) / 2;
+  const top = y + (pickup.h - size) / 2;
+  const ring = 5;
+
+  paint.fillStyle = SHIELD;
+  paint.fillRect(left, top, size, size);
+  paint.fillStyle = PAPER;
+  paint.fillRect(left + ring, top + ring, size - ring * 2, size - ring * 2);
+  paint.fillStyle = SHIELD;
+  paint.fillRect(
+    left + ring * 2,
+    top + ring * 2,
+    size - ring * 4,
+    size - ring * 4,
+  );
+}
+
+function drawRunner(
+  paint: CanvasRenderingContext2D,
+  state: GameState,
+  view: View,
+  groundY: number,
+): void {
+  // The shield has no icon and no timer: the runner itself strobes in the
+  // power-up's colour, so the thing that changed is the thing you are watching.
+  const shielded =
+    invulnerable(state) &&
+    Math.floor(view.now / SHIELD_FLASH_MS) % 2 === 0;
+
+  paint.fillStyle = state.status === "over" ? DIM : shielded ? SHIELD : INK;
   paint.fillRect(RUNNER_X, groundY - state.y - RUNNER_H, RUNNER_W, RUNNER_H);
 }
 

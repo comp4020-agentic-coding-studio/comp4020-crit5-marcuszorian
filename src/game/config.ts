@@ -42,9 +42,29 @@ export const GROUND_EPS = 1e-6;
 // ---------------------------------------------------------------------------
 // Economy — owned by plan/02-economy-and-pickups.md
 //
-// Placeholder values. Steps 7 and 8 add the pickups these numbers are supposed
-// to be balanced against, so nothing here has been tuned against real play yet;
-// the ratio that matters is income against drain, and there is no income yet.
+// Set from the rate model, not yet from play. Speed cancels out of the income
+// and drain rates alike (both scale with it), so the only dial that matters is
+// income per world unit against `DRAIN`, weighted by how much a player actually
+// collects. Target: collecting nearly all of it is net positive, collecting
+// ~70% is net negative, so the bar always matters and skill is what keeps you
+// alive.
+//
+// Income per world unit at full collection, measured off the spawner over
+// 3.6M units of track rather than estimated:
+//
+//   ground  4.06 per 1000 units  x   60  =  0.244
+//   high    0.85 per 1000 units  x  140  =  0.119
+//   power   0.06 per 1000 units  x 1000  =  0.064
+//                                           -----
+//                                           0.427   vs DRAIN 0.35
+//
+// A clean run therefore gains ~0.08 per unit and a 70% run loses ~0.05, which
+// is the window the design wants. Only playing settles whether it *feels* like
+// that window — step 13 is where these move.
+//
+// The ground-token count is measured, not derived from the spacing above:
+// tokens that would land against an obstacle are dropped, which costs about a
+// fifth of them. `TOKEN_VALUE` was raised from 50 to 60 to pay that back.
 // ---------------------------------------------------------------------------
 
 /** The starting ceiling. Only pickups raise it. */
@@ -61,6 +81,74 @@ export const SPEED_PER_BUDGET = 0.023;
 export const SPAWN_GAP_MIN = 400;
 export const SPAWN_GAP_MAX = 780;
 
+// --- pickups ---------------------------------------------------------------
+//
+// Two heights, one button. Ground tokens are collected by running through them;
+// high tokens need a jump and are worth more, which makes the jump both the
+// avoid verb and the collect verb. Heights are stated as the pickup's lower
+// edge, in world units above the ground line.
+
+/** Ground tokens sit at chest height: free while running, missed while airborne. */
+export const TOKEN_Y = 22;
+export const TOKEN_W = 22;
+export const TOKEN_H = 22;
+export const TOKEN_VALUE = 60;
+
+/**
+ * High tokens sit near the top of a jump. Standing, the runner's head reaches
+ * `RUNNER_H` (52), so anything above that is unreachable; the jump apex is
+ * `JUMP_V^2 / 2|GRAVITY|` ≈ 156, putting the runner's head at ~208. 150 is
+ * therefore comfortably in the air and impossible on the ground.
+ */
+export const HIGH_TOKEN_Y = 150;
+export const HIGH_TOKEN_W = 26;
+export const HIGH_TOKEN_H = 26;
+export const HIGH_TOKEN_VALUE = 140;
+
+/** How far past an obstacle's far edge its high token hangs. */
+export const HIGH_TOKEN_LEAD = 46;
+
+/** Chance an obstacle (after the first) carries a high token just past it. */
+export const HIGH_TOKEN_CHANCE = 0.5;
+
+/** Ground tokens arrive in runs of this many, evenly spaced. */
+export const TOKEN_RUN_MIN = 3;
+export const TOKEN_RUN_MAX = 6;
+export const TOKEN_SPACING = 46;
+
+/** Clear track between the end of one run of ground tokens and the next. */
+export const TOKEN_GAP_MIN = 520;
+export const TOKEN_GAP_MAX = 900;
+
+/** A token's own width of clearance around an obstacle, so none is unreachable. */
+export const TOKEN_CLEARANCE = 40;
+
+// --- the power-up ----------------------------------------------------------
+
+/**
+ * Deliberately generous, and taller than the icon `main.ts` draws inside it:
+ * the power-up is rare, so running into one and missing it because you happened
+ * to be mid-hop is the worst thing it could do. The box catches a runner on the
+ * ground or in a small jump; only a committed jump goes over the top of it.
+ */
+export const POWER_Y = 6;
+export const POWER_W = 30;
+export const POWER_H = 54;
+
+/** Milliseconds of invincibility. The only genuinely new state in the game. */
+export const INVULN_MS = 4000;
+
+/**
+ * Budget granted on pickup. Because speed is a function of budget, this *is*
+ * the speed increase — the boost feeds the existing rule rather than adding a
+ * new one. A few seconds of immunity bought with a permanently faster game.
+ */
+export const BOOST = 1000;
+
+/** Rare: one power-up every ~40–65 seconds at early-run speeds. */
+export const POWER_GAP_MIN = 12000;
+export const POWER_GAP_MAX = 20000;
+
 // ---------------------------------------------------------------------------
 // Feel and teaching — owned by plan/03-feel-and-teaching.md
 // ---------------------------------------------------------------------------
@@ -71,6 +159,16 @@ export const SPAWN_GAP_MAX = 780;
  * answer before it arrives.
  */
 export const FIRST_OBSTACLE_X = 1500;
+
+/**
+ * The first run of ground tokens, well before the first obstacle, directly in
+ * the runner's path. It is collected by accident, and the bar jumps — "these
+ * are good" is taught before anything punishes you.
+ */
+export const FIRST_TOKEN_X = 420;
+
+/** Far enough in that the power-up is never the first thing you meet. */
+export const FIRST_POWER_X = 6500;
 
 /** Remaining headroom at which the budget bar reads full, and pins. */
 export const BAR_CAP = 3000;
