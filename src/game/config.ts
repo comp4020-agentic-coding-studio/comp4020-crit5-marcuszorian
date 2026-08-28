@@ -196,13 +196,40 @@ export const IDLE_SCROLL = 55;
 // ---------------------------------------------------------------------------
 // Presentation — owned by plan/04-presentation.md
 //
-// Placeholders. Step 5 makes the canvas responsive across both marking
-// viewports and steps 9–12 do the rest; these are only what step 4 needs to
-// draw anything at all.
+// The world is WORLD_W units wide at every viewport and its height in units
+// follows the aspect ratio, so a phone in portrait has a *taller* world than a
+// desktop, not a narrower one. The same length of track is visible at both
+// marking viewports (1920x1080 and 390x844), which is the point: reaction time
+// is a property of the game, not of the screen.
+//
+// Everything below therefore anchors to the bottom of the world rather than
+// scaling with its height. The play band is the composition — budget bar down
+// to the bottom of the ground strip — and it is identical at every viewport;
+// only the empty sky above it grows.
 // ---------------------------------------------------------------------------
 
-/** Where the ground line sits, as a fraction of the visible world height. */
+/**
+ * Height of the composition, world units. A visible world shorter than this
+ * (any wide screen) simply shows less sky above the bar; a taller one shows
+ * more. Chosen so the whole band fits inside 1920x1080's ~540-unit world.
+ */
+export const PLAY_BAND = 620;
+
+/** Where the ground line sits within the play band, measured from its top. */
 export const GROUND_FRACTION = 0.8;
 
 /** Spacing of the ground's dashes, world units. */
 export const GROUND_DASH = 26;
+
+/**
+ * The HUD is the one thing that cannot be a constant number of world units.
+ * At 390 CSS px wide, one world unit is 0.39 px, so the 22-unit bar the desktop
+ * shows would be 8 px tall and its readout unreadable — and "you must be able to
+ * watch yourself run dry" is the design's load-bearing claim (plan/03).
+ *
+ * So the HUD scales with world *height*: 1x on a landscape desktop, and up to
+ * HUD_SCALE_MAX on a phone in portrait, where there is spare sky to spend on it.
+ * Gameplay geometry never scales — only the readout does.
+ */
+export const HUD_REFERENCE_H = 560;
+export const HUD_SCALE_MAX = 2.2;

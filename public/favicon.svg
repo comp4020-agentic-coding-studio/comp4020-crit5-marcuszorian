@@ -1,0 +1,12 @@
+<!--
+  The tab icon: the same block cursor the <h1> carries, on the same paper. A
+  favicon is not decoration here — with none declared, every browser asks the
+  server for /favicon.ico at the domain root, which under a project base path
+  is a guaranteed 404 (scripts/shot.ts reads the console, and that is how this
+  one was found).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="5" fill="#05100a" />
+  <rect x="4" y="4" width="24" height="24" rx="3" fill="none" stroke="#16301f" stroke-width="2" />
+  <rect x="11" y="8" width="10" height="16" fill="#7dfda6" />
+</svg>

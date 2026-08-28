@@ -1,33 +1,168 @@
+/*
+ * The page is a terminal window and the game runs inside it. There is no
+ * document to scroll and no content beside the canvas, so the layout's whole
+ * job is: a chrome bar that stays put, and a canvas that takes everything else
+ * at every viewport. See plan/04-presentation.md.
+ */
+
+:root {
+  color-scheme: dark;
+  --ink: #7dfda6;
+  --faded: #4c8f68;
+  --edge: #16301f;
+  --paper: #05100a;
+  --chrome: #081509;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+html {
+  /* dvh so the chrome bar is not pushed under a phone's address bar. */
+  height: 100dvh;
+}
+
 body {
+  height: 100%;
   margin: 0;
-  padding: 2rem;
-  font-family: system-ui, sans-serif;
-  line-height: 1.6;
-  color: #1a1a1a;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--mono);
+  /* Nothing here scrolls: a swipe on the canvas is an input, not a gesture. */
+  overflow: hidden;
 }
 
-main {
-  max-width: 40rem;
-  margin: 0 auto;
+/* --- terminal chrome ------------------------------------------------------
+ *
+ * The nav is styled as part of the window rather than hidden away. A landmark
+ * that exists only to satisfy a checker and is then pushed off screen passes
+ * the check and fails the point of it; a path in a title bar is what a terminal
+ * would have shown anyway.
+ */
+
+.chrome {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.4rem 0.75rem;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--edge);
+  font-size: clamp(0.6875rem, 2.4vw, 0.8125rem);
+  letter-spacing: 0.05em;
+  line-height: 1.4;
 }
 
-a {
-  color: #0b5fff;
+.chrome h1 {
+  margin: 0;
+  font-size: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chrome h1::before {
+  content: "▮";
+  margin-right: 0.5em;
+  color: var(--ink);
+}
+
+.chrome nav {
+  margin-right: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chrome a {
+  color: var(--faded);
+  text-decoration: none;
+}
+
+.chrome a:hover,
+.chrome a:focus-visible {
+  color: var(--ink);
+  text-decoration: underline;
 }
 
 /*
- * Enough for the game to be playable at step 4. Step 5 makes the canvas fill
- * the viewport and step 12 makes the page around it terminal chrome; both are
- * plan/04-presentation.md.
- *
- * `touch-action: none` matters now, not later: without it a tap-to-jump on a
- * phone also scrolls the page.
+ * The one control on the page. Sound that cannot be switched off is a liability
+ * in a room, and a keystroke for it would be an instruction the game is not
+ * allowed to write down.
  */
+.chrome button {
+  flex: none;
+  font: inherit;
+  letter-spacing: inherit;
+  color: var(--faded);
+  background: transparent;
+  border: 1px solid var(--edge);
+  border-radius: 2px;
+  padding: 0.1rem 0.5rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chrome button:hover,
+.chrome button:focus-visible {
+  color: var(--ink);
+  border-color: var(--faded);
+}
+
+:focus-visible {
+  outline: 1px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* --- the game ------------------------------------------------------------- */
+
+main {
+  flex: 1 1 auto;
+  /* Without this a flex child refuses to shrink below its content's height. */
+  min-height: 0;
+}
+
 #game {
   display: block;
   width: 100%;
-  aspect-ratio: 2 / 1;
-  background: #05100a;
+  height: 100%;
+  background: var(--paper);
+  /* Without this, a tap-to-jump on a phone also scrolls or zooms the page. */
   touch-action: none;
   cursor: pointer;
+}
+
+/*
+ * Scanlines and a vignette, over everything including the chrome. Cheap enough
+ * to be free — it is one composited layer, not a per-frame cost — and it is
+ * what makes the four flat colours read as a screen rather than as shapes.
+ */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0.16) 0 1px,
+      transparent 1px 4px
+    ),
+    radial-gradient(
+      130% 95% at 50% 50%,
+      transparent 52%,
+      rgba(0, 0, 0, 0.55) 100%
+    );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Screen shake is disabled in the renderer; nothing else here moves. */
+  body::after {
+    background: radial-gradient(
+      130% 95% at 50% 50%,
+      transparent 52%,
+      rgba(0, 0, 0, 0.45) 100%
+    );
+  }
 }
