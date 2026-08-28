@@ -14,3 +14,20 @@ main {
 a {
   color: #0b5fff;
 }
+
+/*
+ * Enough for the game to be playable at step 4. Step 5 makes the canvas fill
+ * the viewport and step 12 makes the page around it terminal chrome; both are
+ * plan/04-presentation.md.
+ *
+ * `touch-action: none` matters now, not later: without it a tap-to-jump on a
+ * phone also scrolls the page.
+ */
+#game {
+  display: block;
+  width: 100%;
+  aspect-ratio: 2 / 1;
+  background: #05100a;
+  touch-action: none;
+  cursor: pointer;
+}
