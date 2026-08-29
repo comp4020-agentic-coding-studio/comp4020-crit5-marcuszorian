@@ -59,10 +59,61 @@ Rules this bought, and worth keeping:
 
 - Anything the canvas draws has to be checked at both viewports, in a picture.
   Aspect ratio is not a detail you can reason your way through.
+- **No check enforces either viewport.** `pnpm shots` renders both and then
+  fails only on a console complaint --- it asserts nothing about what came out,
+  because nothing in a PNG is worth asserting that a person can't see faster.
+  A layout that is fine at 1920x1080 and unplayable at 390x844 is green in
+  `check`, green in CI, and broken at the crit. Opening the two images is the
+  only thing standing in the way of that.
 - Declare a favicon. Undeclared, every browser asks the *domain root* for
   `/favicon.ico`, which under a project base path is a guaranteed 404.
 - `og:image` is absolute, built from `site` + `base`, because a scraper
   resolves nothing against where it found the page.
+
+## CI runs nothing while the repo is private
+
+Both jobs in `.github/workflows/checks.yml` are gated on
+`!github.event.repository.private`, so between the first commit and the
+visibility flip at ship time, **every push is unobserved**. Nothing is broken;
+it is deliberate, and it means local `pnpm check` and `pnpm check:evidence` are
+the only backpressure that exists for the whole build.
+
+The consequence to plan around: the first public push is the first time the
+link checker, the secret scan and the evidence gate have ever run against this
+repo --- and that push happens at the cutoff, when there is no time left to fix
+what they find. Run both locally, early, and don't let the flip be the first
+time they're exercised.
+
+## Tests run in node, so the logic has to be DOM-free
+
+There is no vitest config here, so vitest uses its default **node**
+environment: `document` and `window` are undefined. A module that reaches for
+either at import time throws while the suite is being collected, which makes it
+not merely untested but untestable.
+
+That is a constraint on architecture, not on testing, and it is worth obeying
+deliberately rather than discovering. It splits every feature in two: the rules
+--- state, transitions, and whatever a spec line actually asserts --- go in a
+pure module that imports nothing from the browser, and the DOM, canvas, audio
+and `localStorage` live in a separate one the suite never imports. Keeping the
+rules pure buys reproducibility as well: the same seed and the same inputs
+replay exactly, so a bad moment you felt while playing can be re-run instead of
+described.
+
+`spec/invariants.test.ts` is the exception that proves it --- it needs a DOM, so
+it builds one with jsdom explicitly and parses the built HTML as a string,
+rather than assuming an ambient one.
+
+## Test the relationship, never the tuning number
+
+A test that hardcodes a jump height or an obstacle spacing turns red on every
+balance pass, and a suite you have learned to ignore is worse than no suite.
+Derive timings from the constants instead of writing them out, and assert what
+must stay true: "jumping clears an obstacle that otherwise kills" survives the
+weekend, `expect(jumpHeight).toBe(120)` survives one afternoon. When a sweep is
+cheaper than a hand-picked case, sweep --- and report the parameter in the
+assertion (`expect({seed, taught})`) so a failure names the seed instead of
+saying `false !== true`.
 
 ## This file is yours
 
