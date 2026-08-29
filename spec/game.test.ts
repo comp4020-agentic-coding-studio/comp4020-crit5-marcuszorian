@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   BOOST,
   GRAVITY,
+  HIGH_TOKEN_H,
   HIGH_TOKEN_LEAD,
+  HIGH_TOKEN_Y,
   INVULN_MS,
   JUMP_V,
   OBSTACLE_H,
@@ -11,7 +13,9 @@ import {
   RUNNER_W,
   RUNNER_X,
   START_BUDGET,
+  START_TOKENS,
   TOKEN_CLEARANCE,
+  TOKEN_RUN_MAX,
 } from "../src/game/config.ts";
 import {
   ARM_OVERHANG,
@@ -36,6 +40,7 @@ import {
   nextRandom,
   overlaps,
   pickupAt,
+  pickupValue,
   remainingOf,
   speedFor,
   step,
@@ -73,6 +78,12 @@ function quiet(overrides: Partial<GameState> = {}): GameState {
   return {
     ...createGame(1),
     status: "running",
+    // `createGame` hands back the first screen of the level already spawned, so
+    // that the start screen is the run's own first frame rather than a title
+    // card. An isolated track has to clear it as well as switching the spawners
+    // off, or every test below runs through the opening token run first.
+    obstacles: [],
+    pickups: [],
     nextObstacleAt: Number.POSITIVE_INFINITY,
     nextTokenAt: Number.POSITIVE_INFINITY,
     nextPowerAt: Number.POSITIVE_INFINITY,
@@ -155,7 +166,9 @@ describe("endings", () => {
   });
 
   it("running the budget dry ends the run, with nothing to collide with", () => {
-    const thin = quiet({ seed: 7, budget: START_BUDGET / 10 });
+    // A thin pool, not a low ceiling: the ceiling sets the speed, and dropping
+    // it would make this a test of a slower runner as much as a poorer one.
+    const thin = quiet({ seed: 7, tokens: START_BUDGET / 10 });
     const end = play(thin, 60);
     expect(end.obstacles).toHaveLength(0);
     expect(end.status).toBe("over");
@@ -199,6 +212,9 @@ describe("the one input", () => {
     expect(restarted.cause).toBeNull();
     expect(restarted.used).toBe(0);
     expect(restarted.budget).toBe(START_BUDGET);
+    // The pool resets too, and to the same opening value — a restart that kept
+    // a dead run's empty pool would end again immediately.
+    expect(restarted.tokens).toBeCloseTo(START_TOKENS, 0);
   });
 });
 
@@ -213,9 +229,9 @@ describe("speed", () => {
 });
 
 // The pickups, asserted as relationships. Nothing below names a token's value
-// or a token's height: what has to stay true is that collecting raises the
-// ceiling, that raising the ceiling is what makes the run faster, and that the
-// high ones cost a jump.
+// or a token's height: what has to stay true is that every pickup pays, that
+// only the ones costing a jump raise the ceiling, that raising the ceiling is
+// what makes the run faster, and that the high ones cost a jump.
 describe("tokens", () => {
   const speed = speedFor(START_BUDGET);
   const gap = speed * airTime * 2;
@@ -228,16 +244,86 @@ describe("tokens", () => {
     return play(start, window, jump ? [contact - airTime / 2] : []);
   }
 
+  /**
+   * What one pickup is worth, measured against the identical frame without it:
+   * how much went into the pool, and how much the ceiling moved.
+   *
+   * One frame, with the runner parked at the pickup's own height, because the
+   * alternative — running past it — makes the two arms travel different
+   * distances the moment the ceiling moves, and drain is a function of
+   * distance. A single step holds everything but the pickup equal.
+   */
+  function payoutOf(
+    kind: PickupKind,
+    overrides: Partial<GameState> = {},
+  ): { pool: number; ceiling: number } {
+    const y =
+      kind === "high" ? HIGH_TOKEN_Y + HIGH_TOKEN_H / 2 - RUNNER_H / 2 : 0;
+    const bare = quiet({ y, ...overrides });
+    const one = { ...bare, pickups: [pickupAt(kind, RUNNER_X + RUNNER_W / 2)] };
+    const without = step(bare, { jump: false }, DT);
+    const with_ = step(one, { jump: false }, DT);
+    expect(with_.pickups).toHaveLength(0);
+    return {
+      pool: remainingOf(with_) - remainingOf(without),
+      ceiling: with_.budget - without.budget,
+    };
+  }
+
   it("a ground token is collected by running through it", () => {
     const taken = collectRun("token", false);
     expect(taken.pickups).toHaveLength(0);
     expect(taken.status).toBe("running");
   });
 
-  it("collecting raises the budget, and so the speed of the rest of the run", () => {
+  // The economy's one distinction, and the reason the jump is worth taking a
+  // risk for: what you run through keeps you alive, and what you leave the
+  // ground for makes the window itself bigger.
+  it("a ground token pays into the pool and leaves the ceiling alone", () => {
+    const { pool, ceiling } = payoutOf("token");
+    expect(pool).toBeGreaterThan(0);
+    expect(ceiling).toBe(0);
+  });
+
+  it("a high token raises the ceiling and pays nothing into the pool", () => {
+    const { pool, ceiling } = payoutOf("high");
+    expect(pool).toBe(0);
+    expect(ceiling).toBeGreaterThan(0);
+  });
+
+  it("only the pickups you jump for make the rest of the run faster", () => {
+    const ground = collectRun("token", false);
+    const high = collectRun("high", true);
+    expect(speedFor(ground.budget)).toBe(speedFor(START_BUDGET));
+    expect(speedFor(high.budget)).toBeGreaterThan(speedFor(START_BUDGET));
+  });
+
+  // The two runs travel identically — a ground token no longer moves the speed
+  // — so this is the same stretch of track with and without one pickup on it.
+  it("a ground token still buys survival on the stretch it is taken", () => {
     const taken = collectRun("token", false);
-    expect(taken.budget).toBeGreaterThan(START_BUDGET);
-    expect(speedFor(taken.budget)).toBeGreaterThan(speedFor(START_BUDGET));
+    const missed = play(quiet(), window);
+    expect(taken.distance).toBeCloseTo(missed.distance);
+    expect(remainingOf(taken)).toBeGreaterThan(remainingOf(missed));
+  });
+
+  /**
+   * The decision the cap exists to pose. At a full pool a free token spills, so
+   * the only way to keep earning is to jump for capacity you cannot spend yet —
+   * a high token pays you nothing at the moment you take it and is worth a whole
+   * ground token afterwards.
+   *
+   * Two arms rather than an assertion about one, because "the ceiling rose" is
+   * not the claim. The claim is that raising it is what turns the next free
+   * token from waste back into tokens, and that only shows up in what the *next*
+   * pickup is worth.
+   */
+  it("a full pool spills a free token, and raising the ceiling is what stops it", () => {
+    const full = { tokens: START_BUDGET };
+    expect(payoutOf("token", full).pool).toBeLessThan(pickupValue("token"));
+
+    const roomier = { tokens: START_BUDGET, budget: START_BUDGET + pickupValue("high") };
+    expect(payoutOf("token", roomier).pool).toBeCloseTo(pickupValue("token"));
   });
 
   it("a high token cannot be reached from the ground", () => {
@@ -278,10 +364,15 @@ describe("tokens", () => {
     expect(survived.length).toBeGreaterThan(tookBoth.length);
   });
 
-  it("a high token is worth more than a ground token", () => {
-    const ground = collectRun("token", false).budget - START_BUDGET;
-    const high = collectRun("high", true).budget - START_BUDGET;
-    expect(high).toBeGreaterThan(ground);
+  /**
+   * The two pickups pay in different currencies, so the only honest comparison
+   * is what each is worth in the end — and the capacity a high token grants is
+   * only ever worth the ground tokens it lets you keep. It has to buy back more
+   * than one of them, or the jump is a worse deal than the coin you could have
+   * run through instead, and the risk has no reward attached.
+   */
+  it("the capacity a high token grants buys back more than one free token", () => {
+    expect(pickupValue("high")).toBeGreaterThan(pickupValue("token"));
   });
 });
 
@@ -384,13 +475,41 @@ describe("the power-up", () => {
     );
   }
 
-  it("raises the budget, and so the speed, like every other pickup", () => {
+  it("raises the ceiling, and so the speed", () => {
     const taken = play(
       quiet({ pickups: [pickupAt("power", at(gap))] }),
       contact + airTime,
     );
     expect(taken.budget).toBeGreaterThan(START_BUDGET);
     expect(speedFor(taken.budget)).toBeGreaterThan(speedFor(START_BUDGET));
+  });
+
+  /**
+   * The one pickup that does both, and the only thing in the game that fills the
+   * pool outright. Taken from nearly empty, which is where it matters and where
+   * a grant of `BOOST` tokens would have looked the same — the difference is
+   * that a fill is worth the *new* ceiling, so the assertion is against that and
+   * not against any amount.
+   */
+  it("fills the pool to the ceiling it just raised", () => {
+    const nearlyDry = quiet({
+      tokens: START_BUDGET * 0.3,
+      pickups: [pickupAt("power", at(gap))],
+    });
+    expect(barFraction(nearlyDry)).toBeLessThan(0.5);
+    // The collecting frame itself, not a fixed time: `collect` runs after the
+    // drain within a step, so the pool is exactly full there and a frame late
+    // it is already a hair below. Stepping to the pickup rather than to a clock
+    // is what lets this assert equality instead of closeness.
+    let taken = nearlyDry;
+    while (taken.pickups.length > 0 && taken.status === "running") {
+      taken = step(taken, { jump: false }, DT);
+    }
+    expect(taken.status).toBe("running");
+
+    expect(taken.budget).toBe(START_BUDGET + BOOST);
+    expect(remainingOf(taken)).toBe(taken.budget);
+    expect(barFraction(taken)).toBe(1);
   });
 
   it("makes survivable a collision that otherwise ends the run", () => {
@@ -450,27 +569,34 @@ describe("the power-up", () => {
 describe("teaching the game without words", () => {
   /**
    * Play from cold, pressing every `period` seconds; `0` presses once and then
-   * watches. True if `budget` rose before the runner reached the far side of
+   * watches. True if the bar went *up* before the runner reached the far side of
    * the first obstacle — that is, if the game paid out before it punished.
+   *
+   * A frame-to-frame rise, not a comparison against the opening value. The pool
+   * drains every frame, so a token collected late in the approach can leave the
+   * bar below where it started and still be the payout this is looking for; the
+   * only unambiguous evidence is the one frame where the number went the wrong
+   * way for drain. It also no longer watches `budget`: ground tokens stopped
+   * touching the ceiling, and the ceiling is not what the opening run teaches.
    */
   function taughtBeforeFirstObstacle(seed: number, period: number): boolean {
     let state = step(createGame(seed), { jump: true }, DT);
-    const start = state.budget;
     let sincePress = 0;
 
     for (let t = 0; t < 30 && state.status === "running"; t += DT) {
       sincePress += DT;
       const press = period > 0 && sincePress >= period;
       if (press) sincePress = 0;
+      const before = remainingOf(state);
       state = step(state, { jump: press }, DT);
 
-      if (state.budget > start) return true;
+      if (remainingOf(state) > before) return true;
       const lead = state.distance + RUNNER_X + RUNNER_W;
       if (state.obstacles.some((obstacle) => lead > obstacle.x + obstacle.w)) {
         return false;
       }
     }
-    return state.budget > start;
+    return false;
   }
 
   // Sweeping the cadence is the whole value of this test. A player pressing at
@@ -491,8 +617,21 @@ describe("teaching the game without words", () => {
     }
   });
 
-  it("starts the bar full, so a pickup is the only thing that fills it", () => {
-    expect(barFraction(createGame(1))).toBe(1);
+  /**
+   * The opening bar is deliberately short of full, and it has to be. The first
+   * run of ground tokens is the teaching one and it teaches by *moving the bar*
+   * — but a ground token now tops up a pool capped at the ceiling, so a run that
+   * started full would clip every one of them and show nothing at all. See
+   * `START_TOKENS`.
+   *
+   * The headroom is the assertion, not the fraction: enough for the whole first
+   * run to land uncut, and not so much that the opening frame is painted amber.
+   */
+  it("starts the bar with room for the whole first run to show", () => {
+    const opening = createGame(1);
+    const headroom = opening.budget - remainingOf(opening);
+    expect(headroom).toBeGreaterThanOrEqual(TOKEN_RUN_MAX * pickupValue("token"));
+    expect(barLevel(opening)).toBe("ok");
   });
 
   it("moves the bar when a token is collected", () => {
@@ -503,7 +642,7 @@ describe("teaching the game without words", () => {
     // not before-and-after: the bar is always draining, and whether one token
     // out-earns half a second of DRAIN is a balance number that moves. What has
     // to stay true is that taking it leaves you better off than not taking it.
-    const drained = quiet({ used: START_BUDGET / 2 });
+    const drained = quiet({ tokens: START_BUDGET / 2 });
     const missed = play(drained, 0.5);
     const taken = play({ ...drained, pickups: [pickupAt("token", at(10))] }, 0.5);
     expect(taken.pickups).toHaveLength(0);

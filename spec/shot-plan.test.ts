@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { FLOAT_LIFE } from "../src/game/config.ts";
 import { SHOTS } from "../scripts/shot-plan.ts";
 import type { Shot } from "../scripts/shot-plan.ts";
 import type { Status } from "../src/game/rules.ts";
-import { createGame, step } from "../src/game/rules.ts";
+import { createGame, remainingOf, step } from "../src/game/rules.ts";
 
 // A sensor, not a contract test. It answers a failure this repo actually had:
 // a balance pass moved SPEED_BASE, the first obstacle started arriving 300ms
@@ -43,19 +44,40 @@ function expected(name: string): Status {
  * ENDING_LOCKOUT after a death — photographs the death screen. Asking only for
  * the final status passed the exact broken schedule this test exists to catch.
  */
-function replay(shot: Shot): { status: Status; died: boolean } {
+function replay(shot: Shot): {
+  status: Status;
+  died: boolean;
+  /** Milliseconds before the shutter that the last pickup was taken, or null. */
+  sinceCollect: number | null;
+} {
   const pending = [...shot.press].sort((a, b) => a - b);
   let state = createGame(1);
   let died = false;
+  let collectedAt: number | null = null;
   for (let ms = 0; ms < shot.at; ms += DT * 1000) {
     // A press fires on the first frame at or after its mark, which is what
     // `Input.dispatchKeyEvent` amounts to against a running rAF loop.
     const jump = pending.length > 0 && pending[0]! <= ms;
     if (jump) pending.shift();
+    const before = state;
     state = step(state, { jump }, DT);
+    // A pickup is the one thing that can send either number *up* — the pool
+    // otherwise only drains and the ceiling otherwise only holds still. Cheaper
+    // and less brittle than diffing the pickup array, which also shortens when
+    // something merely scrolls out of the world.
+    if (
+      remainingOf(state) > remainingOf(before) ||
+      state.budget > before.budget
+    ) {
+      collectedAt = ms;
+    }
     if (state.status === "over") died = true;
   }
-  return { status: state.status, died };
+  return {
+    status: state.status,
+    died,
+    sinceCollect: collectedAt === null ? null : shot.at - collectedAt,
+  };
 }
 
 describe("the screenshot schedule still photographs what it says it does", () => {
@@ -67,6 +89,38 @@ describe("the screenshot schedule still photographs what it says it does", () =>
       // doing, rather than saying `"over" !== "running"`.
       expect({ shot: shot.name, status, diedFirst: died && want !== "over" })
         .toEqual({ shot: shot.name, status: want, diedFirst: false });
+    }
+  });
+
+  /**
+   * The pickup readout is pixels and nothing else — a word that lives for
+   * `FLOAT_LIFE` seconds, drawn straight to the canvas, absent from the DOM,
+   * from `dist/`, and from any state a test can read. The only way anything in
+   * this repo ever looks at it is a screenshot taken while one is on screen, so
+   * that is the thing to hold still: the `-pickup` shots must open the shutter
+   * *after* a collection and *before* the word it produced has expired.
+   *
+   * Both halves matter. Too early and the frame is empty track; too late — which
+   * is what a balance pass on `TOKEN_SPACING` or `SPEED_BASE` would cause — and
+   * the file is a perfectly good run frame with nothing in it worth the name.
+   */
+  it("catches a pickup word still on screen in the -pickup shots", () => {
+    const pickupShots = SHOTS.filter((shot) => shot.name.endsWith("-pickup"));
+    expect(pickupShots.length).toBeGreaterThan(0);
+
+    for (const shot of pickupShots) {
+      const { sinceCollect } = replay(shot);
+      const alive =
+        sinceCollect !== null &&
+        sinceCollect > 0 &&
+        sinceCollect < FLOAT_LIFE * 1000;
+      // Reported with the gap so a failure says how far the schedule drifted
+      // and in which direction, rather than `false !== true`.
+      expect({ shot: shot.name, sinceCollect, alive }).toEqual({
+        shot: shot.name,
+        sinceCollect,
+        alive: true,
+      });
     }
   });
 

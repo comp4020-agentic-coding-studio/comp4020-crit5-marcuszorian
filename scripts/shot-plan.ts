@@ -7,6 +7,8 @@
 // can import is a shot list nothing can check.
 import {
   FIRST_OBSTACLE_X,
+  FIRST_TOKEN_X,
+  FLOAT_LIFE,
   GRAVITY,
   JUMP_V,
   OBSTACLE_H,
@@ -14,6 +16,7 @@ import {
   RUNNER_W,
   RUNNER_X,
   START_BUDGET,
+  TOKEN_SPACING,
 } from "../src/game/config.ts";
 import { speedFor } from "../src/game/rules.ts";
 
@@ -66,12 +69,34 @@ const APEX = JUMP + AIRBORNE / 2;
 /** Long enough after the fatal contact for the ending to have faded up. */
 const ENDED = START + CONTACT + 1000;
 
-/** The two marking viewports, idle and mid-run, plus an ending. */
+// The pickup frames. What a pickup did is said in a word that lives for
+// FLOAT_LIFE seconds and appears nowhere else — not in the DOM, not in `dist/`,
+// not in any state a test can read — so if the schedule does not photograph one,
+// nothing in this repo ever looks at it. `spec/shot-plan.test.ts` holds the
+// shutter to it.
+//
+// Derived the same way the jump is, and for the same reason: the opening run of
+// ground tokens starts at FIRST_TOKEN_X and is spaced TOKEN_SPACING apart, so a
+// balance pass on either would otherwise leave these two files photographing
+// empty track.
+/** Milliseconds from the opening press to the first ground token. */
+const TOKEN_CONTACT = ((FIRST_TOKEN_X - RUNNER_X - RUNNER_W) / SPEED) * 1000;
+/** And to the third, which is where the stack of words is at its tallest. */
+const THIRD_TOKEN = TOKEN_CONTACT + (2 * TOKEN_SPACING * 1000) / SPEED;
+/**
+ * A third of a life after that word appeared: past the pop, still at full
+ * opacity, with the two below it partway through their fade.
+ */
+const COLLECTING = START + THIRD_TOKEN + FLOAT_LIFE * 1000 * 0.34;
+
+/** The two marking viewports, idle, collecting and mid-run, plus an ending. */
 export const SHOTS: readonly Shot[] = [
   { name: "desktop-idle", width: 1920, height: 1080, dpr: 1, press: [], at: 700 },
+  { name: "desktop-pickup", width: 1920, height: 1080, dpr: 1, press: [START], at: COLLECTING },
   { name: "desktop-run", width: 1920, height: 1080, dpr: 1, press: [START, JUMP], at: APEX },
   { name: "desktop-over", width: 1920, height: 1080, dpr: 1, press: [START], at: ENDED },
   { name: "phone-idle", width: 390, height: 844, dpr: 3, press: [], at: 700 },
+  { name: "phone-pickup", width: 390, height: 844, dpr: 3, press: [START], at: COLLECTING },
   { name: "phone-run", width: 390, height: 844, dpr: 3, press: [START, JUMP], at: APEX },
   { name: "phone-over", width: 390, height: 844, dpr: 3, press: [START], at: ENDED },
   { name: "card", ...CARD, press: [START, JUMP], at: APEX },

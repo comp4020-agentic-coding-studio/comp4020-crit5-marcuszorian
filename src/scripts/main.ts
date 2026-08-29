@@ -10,6 +10,11 @@
 
 import {
   CARET_BLINK_MS,
+  FLOAT_FONT,
+  FLOAT_LEAD,
+  FLOAT_LIFE,
+  FLOAT_LIFE_POWER,
+  FLOAT_RISE,
   GROUND_DASH,
   GROUND_FRACTION,
   HUD_REFERENCE_H,
@@ -31,6 +36,7 @@ import {
   grounded,
   invulnFraction,
   invulnerable,
+  pickupValue,
   step,
 } from "../game/rules.ts";
 import { RUNNER_SPRITE, groundedReach } from "../game/sprite.ts";
@@ -148,6 +154,50 @@ const PICKUP_BURST: Record<PickupKind, { count: number; speed: number; life: num
   power: { count: 26, speed: 430, life: 0.8, size: 8, colour: SHIELD },
 };
 
+// --- what a pickup did --------------------------------------------------------
+//
+// A pickup raises `budget` and never touches `used`, so the bar jumps and the
+// score does not. That is the one rule in the game a burst of particles cannot
+// state, and the bar alone only says it to a player already watching the bar —
+// which, at the moment of a pickup, is not where anyone is looking.
+//
+// So each pickup throws off the sentence: the amount, and the thing it is an
+// amount of. Named in the HUD's own words ("MAX TOKENS" against "TOKENS USED"),
+// because two labels for one quantity is worse than none, and drawn in the
+// pickup's own colour so the word and the thing that produced it are obviously
+// the same event.
+//
+// It is *not* a tutorial line: it is gone in half a second, it never appears
+// twice for the same reason, and a player who never reads one has lost nothing
+// the bar was not already telling them.
+
+// Sizes and timings are in `config.ts` with the rest of the presentation
+// tuning; the wording is here, because it is the one part of it a screenshot
+// test has no opinion about.
+
+/**
+ * What each kind is an increase *of* — and the two answers are the whole
+ * economy. A ground token pays tokens; the ones you leave the ground for raise
+ * the ceiling those tokens live under, which is also what makes the run faster.
+ * See `raisesMax` in the rules.
+ */
+const PICKUP_LABEL: Record<PickupKind, string> = {
+  token: "TOKENS",
+  high: "MAX TOKENS",
+  power: "MAX TOKENS",
+};
+
+/**
+ * The power-up does three things, and the other two go on a second line rather
+ * than into a longer first one. At the phone's HUD scale a word is ~25 world
+ * units per character against a 1000-unit stage, so a single
+ * `+1000 MAX TOKENS · FULL · SHIELD` would be two thirds of the screen wide and
+ * centred on a pickup that can be near either edge. Two short lines stack — the
+ * ladder in `effects.float` puts the second above the first for free — and the
+ * jackpot reading better anyway for arriving as a list.
+ */
+const POWER_EXTRA = "FULL · SHIELD";
+
 // --- the scrollback sky -------------------------------------------------------
 //
 // Laid out once at module load and then only read: the shape of the output
@@ -231,7 +281,15 @@ function start(surface: HTMLCanvasElement, paint: CanvasRenderingContext2D) {
   const shakeable = createEffects();
   const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
   const effects: Effects = calm
-    ? { ...shakeable, shake: () => {} }
+    ? {
+        ...shakeable,
+        shake: () => {},
+        // The word still appears, without the overshoot and with half the
+        // travel: it is the only thing on screen that says what a pickup did,
+        // so taking it away costs a reduced-motion player information rather
+        // than decoration.
+        float: (spec) => shakeable.float({ ...spec, calm: true }),
+      }
     : shakeable;
   let muted = readNumber(MUTE_KEY) === 1;
   sound.setMuted(muted);
@@ -410,11 +468,28 @@ function react(
 
   for (const pickup of taken(before, after)) {
     const burst = PICKUP_BURST[pickup.kind];
+    const x = pickup.x - after.distance + pickup.w / 2;
     effects.burst({
-      x: pickup.x - after.distance + pickup.w / 2,
+      x,
       y: view.groundY - pickup.y - pickup.h / 2,
       ...burst,
     });
+    const word = {
+      x,
+      // From the top of the box it came out of, not the middle: a word rising
+      // out of a ground token would otherwise start underneath the runner.
+      y: view.groundY - pickup.y - pickup.h - FLOAT_LEAD * view.hud,
+      colour: burst.colour,
+      size: FLOAT_FONT * view.hud,
+      family: MONO,
+      life: pickup.kind === "power" ? FLOAT_LIFE_POWER : FLOAT_LIFE,
+      rise: FLOAT_RISE * view.hud,
+    };
+    effects.float({
+      ...word,
+      text: `+${pickupValue(pickup.kind)} ${PICKUP_LABEL[pickup.kind]}`,
+    });
+    if (pickup.kind === "power") effects.float({ ...word, text: POWER_EXTRA });
     sound.play(voiceFor(pickup.kind));
     if (pickup.kind === "power") effects.shake(SHAKE_POWER, SHAKE_POWER_MS / 1000);
   }
@@ -505,15 +580,39 @@ interface Layout {
 }
 
 /**
- * Anchored to the bottom, never scaled. A 390x844 phone has a world nearly four
- * times taller than a 1920x1080 desktop, and the answer to that is more sky —
- * not a bigger runner, not a longer view of the track, and not a squashed one.
+ * Centred, never scaled. A 390x844 phone has a world nearly four times taller
+ * than a 1920x1080 desktop, and the answer to that is more room around the
+ * composition — not a bigger runner, not a longer view of the track, and not a
+ * squashed one.
+ *
+ * `PLAY_BAND` is the composition, and on a world taller than it there is a
+ * choice about where the leftover goes. It used to all go above, which is the
+ * same as anchoring everything to the bottom: on a phone that put the bar, the
+ * runner and the ground in the bottom third with two thirds of empty sky over
+ * them, and the thing you are actually looking at sat at the very edge of the
+ * screen — furthest from the middle of your attention and closest to the browser
+ * chrome. Splitting the leftover evenly puts the band in the middle instead.
+ *
+ * Only the ground *line* moves. The floor under it still runs to the bottom of
+ * the screen: the band was tried as a literal band, floating with paper under
+ * it, and a strip of ground hanging in the middle of a phone reads as a platform
+ * the runner could fall off rather than as the ground. What the extra height
+ * below buys instead is depth — the same answer the sky gives above it.
+ *
+ * Wide screens are untouched. A 1920x1080 world is shorter than the band, so
+ * there is no leftover to split and the two rules agree — which is deliberate,
+ * because that composition was already right.
  */
 function layout(worldH: number): Layout {
   // The ground strip is a constant thickness, except on a world too short to
   // afford it, where it takes its share instead.
   const strip = Math.min(worldH, PLAY_BAND) * (1 - GROUND_FRACTION);
-  const groundY = worldH - strip;
+  // The lower of the two candidate ground lines wins: bottom-anchored on a
+  // world that cannot fit the band, centred on one that can.
+  const groundY = Math.min(
+    worldH - strip,
+    (worldH - PLAY_BAND) / 2 + PLAY_BAND * GROUND_FRACTION,
+  );
   const hud = Math.min(Math.max(worldH / HUD_REFERENCE_H, 1), HUD_SCALE_MAX);
   // The bar rides a fixed distance above the ground line so that the glance
   // from runner to bar is the same on both marking viewports; on a short world
@@ -639,15 +738,21 @@ const mod = (value: number, span: number): number =>
   ((value % span) + span) % span;
 
 /**
- * Dashes rather than a solid line: the drift is what makes the world read as
- * moving before the player has done anything, and a solid line cannot show it.
+ * Dashes rather than a solid line, so the ground can show its own speed.
+ *
+ * It does *not* take `idleDrift`, and that is the change the level preview
+ * bought: the idle screen now holds the real opening of the track, standing
+ * still, and a ground scrolling underneath stationary tokens reads as a bug
+ * rather than as anticipation. Only the sky drifts before the press — it is
+ * scenery, it is behind everything, and nothing on it is at rest for it to
+ * contradict.
  */
 function drawGround(
   paint: CanvasRenderingContext2D,
   state: GameState,
   view: View,
 ): void {
-  const offset = (state.distance + view.idleDrift) % GROUND_DASH;
+  const offset = state.distance % GROUND_DASH;
 
   paint.fillStyle = DIM;
   paint.fillRect(0, view.groundY, WORLD_W, view.worldH - view.groundY);

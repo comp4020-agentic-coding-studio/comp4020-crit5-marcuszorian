@@ -9,7 +9,6 @@
 // felt while playing can be reproduced instead of described.
 
 import {
-  BAR_CAP,
   BAR_CRIT,
   BAR_WARN,
   BOOST,
@@ -42,6 +41,7 @@ import {
   SPEED_BASE,
   SPEED_PER_BUDGET,
   START_BUDGET,
+  START_TOKENS,
   TOKEN_CLEARANCE,
   TOKEN_GAP_MAX,
   TOKEN_GAP_MIN,
@@ -100,9 +100,23 @@ export interface GameState {
   readonly vy: number;
   readonly obstacles: readonly Obstacle[];
   readonly pickups: readonly Pickup[];
-  /** Tokens consumed. Rises with distance, and is the score. */
+  /**
+   * Tokens consumed over the whole run. Monotonic, and the score. It is not the
+   * other half of `tokens`: spending is permanent and the pool refills, so the
+   * two diverge the moment anything is collected.
+   */
   readonly used: number;
-  /** The ceiling. Starts at `START_BUDGET`; only pickups raise it. */
+  /**
+   * Tokens in hand — the bar. Drains with distance, refilled by pickups, and
+   * never above `budget`. The run ends when it reaches zero.
+   */
+  readonly tokens: number;
+  /**
+   * The ceiling on `tokens`, and the only input to speed. Starts at
+   * `START_BUDGET`, and *only the pickups that cost something* raise it: a
+   * ground token you ran through pays into the pool, a high token you had to
+   * jump for makes the pool bigger. See `raisesMax`.
+   */
   readonly budget: number;
   /** Absolute world x of the next obstacle to spawn. */
   readonly nextObstacleAt: number;
@@ -136,22 +150,31 @@ export function nextRandom(seed: number): { value: number; seed: number } {
 
 /** What the budget bar shows. The run ends when this reaches zero. */
 export function remainingOf(state: GameState): number {
-  return state.budget - state.used;
+  return state.tokens;
 }
 
 /** The three states of the budget bar. Colour is `main.ts`'s business. */
 export type BarLevel = "ok" | "warn" | "crit";
 
 /**
- * How much of the bar is filled. A fixed cap, not `remaining / budget`: at a
- * constant cap every pickup is the same visible bump for the whole run, so the
- * pickup-to-bar link keeps teaching. Drawn as a percentage of a growing budget,
- * a late-game token would move the bar by nothing — exactly when the feedback
- * matters most. Headroom above the cap still counts toward speed; it just pins
- * the bar at full.
+ * How much of the bar is filled: tokens against the ceiling that holds them.
+ *
+ * It used to be tokens against a fixed `BAR_CAP`, on the argument that a
+ * growing denominator makes a late-game token move the bar by nothing. That
+ * argument belonged to the old economy, where every pickup raised the ceiling
+ * and the ceiling was therefore never a thing the player was managing. Now that
+ * only the pickups you jump for raise it, the ceiling *is* the second resource,
+ * and a bar that cannot show it is hiding half the game: at a fixed cap, every
+ * "+MAX TOKENS" above the cap moves nothing on screen at all.
+ *
+ * So the bar is a container. Filling it is a ground token, widening it is a
+ * high token, and widening it drops the fill — which is honest, is the moment
+ * the readout says `+140 MAX TOKENS`, and is the whole reason to want one: room
+ * to keep earning once you are pressed against the top.
  */
 export function barFraction(state: GameState): number {
-  return Math.max(0, Math.min(1, remainingOf(state) / BAR_CAP));
+  if (state.budget <= 0) return 0;
+  return Math.max(0, Math.min(1, remainingOf(state) / state.budget));
 }
 
 /**
@@ -261,7 +284,10 @@ export function pickupAt(kind: PickupKind, x: number): Pickup {
   }
 }
 
-/** Budget granted by collecting one. Every pickup pays in the same currency. */
+/**
+ * How much collecting one is worth. One number per kind, but not one meaning:
+ * `raisesMax` says which side of the ledger it lands on.
+ */
 export function pickupValue(kind: PickupKind): number {
   switch (kind) {
     case "token":
@@ -273,10 +299,64 @@ export function pickupValue(kind: PickupKind): number {
   }
 }
 
+/**
+ * Whether collecting one also raises the ceiling — which, through `speedFor`,
+ * is the same thing as making the rest of the run faster.
+ *
+ * This is the game's one economic distinction, and for the two common pickups
+ * the effects are exclusive: it pays tokens or it pays capacity, never both.
+ * Which one follows what the pickup costs to take. A ground token is free — you
+ * run through it, and it pays you tokens you can spend. A high token costs a
+ * jump, and a jump is the only way to die, so the thing it buys is the permanent
+ * one: a bigger window, and a faster game to spend it in.
+ *
+ * The consequence worth knowing: capacity you cannot fill is worth nothing, so a
+ * high token is a bet on being able to earn against it later, and it is dead
+ * weight to a player who is not collecting. Which is exactly the decision the
+ * layout exists to pose — and it only works because ground tokens out-earn
+ * `DRAIN`, so a clean run really does press against the ceiling.
+ *
+ * The power-up is the deliberate exception and reads as one *because* the rule
+ * is otherwise strict — it raises the ceiling and then fills the pool to it. See
+ * `fillsPool`.
+ */
+export function raisesMax(kind: PickupKind): boolean {
+  return kind !== "token";
+}
+
+/**
+ * Whether collecting one refills the pool to the ceiling. Only the power-up
+ * does, which is what makes it the jackpot: every other pickup moves one of the
+ * two numbers, and this moves both to their best value at once.
+ *
+ * It is a fill rather than a payment on purpose. A flat grant would be a fourth
+ * tuning number that goes stale against `START_BUDGET`, and would be worth less
+ * the further a run had got — the opposite of what a rare pickup should feel
+ * like. "Full" is worth more precisely when the ceiling is high, so the reward
+ * grows with the run that earned it.
+ */
+export function fillsPool(kind: PickupKind): boolean {
+  return kind === "power";
+}
+
 // --- the reducer -----------------------------------------------------------
 
+/**
+ * A new run, already holding the first screen of its own level.
+ *
+ * The spawn is the point. Without it the start screen is bare track and the
+ * opening run of tokens blinks into existence at x=420 on the first running
+ * frame — the game cuts from a title card to a different picture, and the first
+ * thing the player ever sees the world do is pop. Spawning at rest makes the
+ * idle screen *literally the first frame of the run*: the level you are about
+ * to play is already laid out in front of you, and the press sets it moving
+ * rather than replacing it.
+ *
+ * It costs nothing to keep pure — `spawn` is a function of the seed and the
+ * distance, and at distance zero it fills exactly the screen you can see.
+ */
 export function createGame(seed: number): GameState {
-  return {
+  const empty: GameState = {
     status: "idle",
     seed,
     elapsed: 0,
@@ -286,6 +366,7 @@ export function createGame(seed: number): GameState {
     obstacles: [],
     pickups: [],
     used: 0,
+    tokens: START_TOKENS,
     budget: START_BUDGET,
     nextObstacleAt: FIRST_OBSTACLE_X,
     nextTokenAt: FIRST_TOKEN_X,
@@ -293,6 +374,7 @@ export function createGame(seed: number): GameState {
     invulnUntil: 0,
     cause: null,
   };
+  return { ...empty, ...spawn(empty, 0) };
 }
 
 /**
@@ -338,7 +420,7 @@ function advance(state: GameState, input: Input, dt: number): GameState {
   }
 
   const distance = state.distance + travelled;
-  const used = state.used + travelled * DRAIN;
+  const spent = travelled * DRAIN;
 
   const moved: GameState = {
     ...state,
@@ -346,7 +428,10 @@ function advance(state: GameState, input: Input, dt: number): GameState {
     distance,
     y,
     vy,
-    used,
+    // `used` is the score and only ever rises; `tokens` is the pool and does
+    // both. The same spend hits each of them, in opposite directions.
+    used: state.used + spent,
+    tokens: state.tokens - spent,
     ...spawn(state, distance),
   };
 
@@ -375,23 +460,38 @@ function advance(state: GameState, input: Input, dt: number): GameState {
     };
   }
 
-  if (remainingOf(next) <= 0) {
-    return { ...next, status: "over", cause: "drained", used: next.budget };
+  if (next.tokens <= 0) {
+    // Pinned to exactly zero so the bar reads empty rather than slightly
+    // negative on the frame the run ends.
+    return { ...next, status: "over", cause: "drained", tokens: 0 };
   }
 
   return next;
 }
 
 /**
- * Take everything the runner is touching. Pickups pay into `budget`, never into
- * `used`, so collecting raises the ceiling and — through `speedFor` — the speed
- * of the rest of the run. Every reward is also a difficulty increase.
+ * Take everything the runner is touching, and send each pickup's value to
+ * whichever of the two numbers it belongs to.
+ *
+ * A ground token is tokens and nothing else; a high token is capacity and
+ * nothing else — it hands you no tokens at all, it hands you somewhere to put
+ * them. Which is why the ceiling is only worth raising when the pool is pressing
+ * against it, and why the pool can only press against it if ground tokens
+ * out-earn `DRAIN`. See the economy note in config.
+ *
+ * Order matters where the two meet. The ceiling is raised first, so a power-up's
+ * fill goes to the *new* ceiling and a ground token taken on the same frame as a
+ * high token is not clipped against the old one. Both are rare — the second
+ * needs a jump landing exactly on a coin — but a rule that only holds when
+ * pickups arrive one at a time is a rule that fails in the moment worth
+ * photographing.
  */
 function collect(
   state: GameState,
-): Pick<GameState, "pickups" | "budget" | "invulnUntil"> {
+): Pick<GameState, "pickups" | "tokens" | "budget" | "invulnUntil"> {
   const runner = runnerBox(state);
   const pickups: Pickup[] = [];
+  const taken: PickupKind[] = [];
   let budget = state.budget;
   let invulnUntil = state.invulnUntil;
 
@@ -400,13 +500,25 @@ function collect(
       pickups.push(pickup);
       continue;
     }
-    budget += pickupValue(pickup.kind);
+    taken.push(pickup.kind);
+    if (raisesMax(pickup.kind)) budget += pickupValue(pickup.kind);
     if (pickup.kind === "power") {
       invulnUntil = state.elapsed + INVULN_MS / 1000;
     }
   }
 
-  return { pickups, budget, invulnUntil };
+  let tokens = state.tokens;
+  for (const kind of taken) {
+    if (fillsPool(kind)) tokens = budget;
+    else if (!raisesMax(kind)) tokens += pickupValue(kind);
+  }
+
+  return {
+    pickups,
+    tokens: Math.min(budget, tokens),
+    budget,
+    invulnUntil,
+  };
 }
 
 type Spawned = Pick<

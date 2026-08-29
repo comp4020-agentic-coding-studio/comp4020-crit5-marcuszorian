@@ -56,37 +56,86 @@ export const GROUND_EPS = 1e-6;
 // ---------------------------------------------------------------------------
 // Economy — owned by plan/02-economy-and-pickups.md
 //
-// Set from the rate model, not yet from play. Speed cancels out of the income
-// and drain rates alike (both scale with it), so the only dial that matters is
-// income per world unit against `DRAIN`, weighted by how much a player actually
-// collects. Target: collecting nearly all of it is net positive, collecting
-// ~70% is net negative, so the bar always matters and skill is what keeps you
-// alive.
+// Two quantities, not one. `tokens` is the pool the bar draws and the run dies
+// on; `budget` is the ceiling on that pool, and the sole input to speed. What
+// separates them is which pickups touch which:
 //
-// Income per world unit at full collection, measured off the spawner over
+//   ground token   free — you run through it          pool only
+//   high token     costs a jump, the only way to die   ceiling only
+//   power-up       rare                                fills the pool, raises
+//                                                      the ceiling, + shield
+//
+// The first two are *exclusive*, and that is the point: one pickup keeps you
+// alive, a different one makes the game harder, and the second is the one you
+// have to leave the ground for. Ground tokens used to raise the ceiling too,
+// which meant the run accelerated on its own just by being played cleanly and
+// the jump was only ever an avoid verb with a bonus attached.
+//
+// Making them exclusive costs something, and the cost has to be paid here.
+// Capacity you cannot fill is worth nothing — so if ground tokens alone do not
+// out-earn `DRAIN`, the pool can never reach the ceiling, and a high token is a
+// bigger container for water that never arrives. The whole split rests on
+// ground income clearing drain on a clean run.
+//
+// Speed cancels out of the income and drain rates alike (both scale with it),
+// so the only dial that matters is income per world unit against `DRAIN`,
+// weighted by how much a player actually collects. Target: collecting nearly
+// all of it is net positive, collecting ~70% is net negative, so the bar always
+// matters and skill is what keeps you alive.
+//
+// Pool income per world unit at full collection, measured off the spawner over
 // 3.6M units of track rather than estimated:
 //
-//   ground  4.06 per 1000 units  x   60  =  0.244
+//   ground  4.06 per 1000 units  x  120  =  0.487   vs DRAIN 0.40
+//
+// A clean run gains ~0.09 per unit; a 70% run earns 0.341 and loses ~0.06.
+// `TOKEN_VALUE` doubled from 60 to 120 to get there, and it had to: under the
+// exclusive rule the ground token is the *only* thing paying into the pool,
+// where before it carried a third of the load.
+//
+// The ceiling grows on a separate, slower clock, and it is the difficulty dial:
+//
 //   high    0.85 per 1000 units  x  140  =  0.119
 //   power   0.06 per 1000 units  x 1000  =  0.064
 //                                           -----
-//                                           0.427   vs DRAIN 0.40
+//                                           0.183
 //
-// A clean run therefore gains ~0.03 per unit and a 70% run loses ~0.10.
+// So a run that jumps for everything accelerates at a bit over 40% of the pace
+// the old economy set, and only in response to jumps.
 //
-// Raised from the 0.35 the model was built at, after playing it: the game was
-// too forgiving, and the tighter window is the whole difference. Near-perfect
-// collection still stays ahead — it has to, or the budget never rises and the
-// run never accelerates — but only just, which is what keeps the bar the thing
-// you are watching rather than a meter that fills itself.
+// The asymmetry that falls out of the cap is now the core loop rather than a
+// footnote: a ground token taken while the pool is full is wasted outright, and
+// the only way to stop wasting them is to jump for a high token and make the
+// pool bigger — which also makes the game faster, which drains it again. Full
+// is the cue to start reaching upward.
 //
 // The ground-token count is measured, not derived from the spacing above:
 // tokens that would land against an obstacle are dropped, which costs about a
-// fifth of them. `TOKEN_VALUE` was raised from 50 to 60 to pay that back.
+// fifth of them, and the value carries that.
 // ---------------------------------------------------------------------------
 
-/** The starting ceiling. Only pickups raise it. */
+/** The starting ceiling. Only the pickups you have to jump for raise it. */
 export const START_BUDGET = 3000;
+
+/**
+ * Tokens in hand at the start — deliberately *below* the ceiling, which is the
+ * one thing the pool model costs and has to buy back.
+ *
+ * The opening run of ground tokens exists to teach "gold is worth taking"
+ * before anything punishes you, and it teaches it by moving the bar. Under the
+ * old rules a token raised the ceiling, so it moved the bar from anywhere,
+ * including from full. Under these it tops up a pool that is capped at the
+ * ceiling — so a run that starts full would swallow the entire opening lesson
+ * and show nothing at all.
+ *
+ * 70% of the ceiling leaves room for the whole first run — 6 x `TOKEN_VALUE`
+ * against the ~190 drained by the time the last of them is reached, so the pool
+ * peaks around 2630 of 3000 — without clipping a single token. Every one of
+ * them is therefore a visible step up the bar. It also opens on a bar that is
+ * obviously not full, which is its own quiet instruction, while staying clear
+ * of `BAR_WARN` so the opening frame is not painted as a warning.
+ */
+export const START_TOKENS = START_BUDGET * 0.7;
 
 /** Tokens burned per world unit travelled. `used` is also the score. */
 export const DRAIN = 0.4;
@@ -110,7 +159,8 @@ export const SPAWN_GAP_MAX = 780;
 export const TOKEN_Y = 22;
 export const TOKEN_W = 22;
 export const TOKEN_H = 22;
-export const TOKEN_VALUE = 60;
+/** The only pickup that pays into the pool. See the economy note above. */
+export const TOKEN_VALUE = 120;
 
 /**
  * High tokens sit near the top of a jump. Standing, the runner's head reaches
@@ -162,9 +212,17 @@ export const POWER_H = 54;
 export const INVULN_MS = 4000;
 
 /**
- * Budget granted on pickup. Because speed is a function of budget, this *is*
- * the speed increase — the boost feeds the existing rule rather than adding a
- * new one. A few seconds of immunity bought with a permanently faster game.
+ * Ceiling granted on pickup. Because speed is a function of the ceiling, this
+ * *is* the speed increase — the boost feeds the existing rule rather than
+ * adding a new one. A few seconds of immunity bought with a permanently faster
+ * game.
+ *
+ * The power-up also fills the pool to the new ceiling, and it is the only thing
+ * in the game that does. That is what makes it the jackpot rather than a third
+ * flavour of token: everything else either tops you up or widens the container,
+ * and this one does both at once and hands you the shield to spend it with. It
+ * is the only pickup whose value depends on when you take it — worth a full
+ * `budget` when you are nearly dead, worth only the ceiling when you are full.
  */
 export const BOOST = 1000;
 
@@ -198,10 +256,14 @@ export const FIRST_TOKEN_X = 420;
 /** Far enough in that the power-up is never the first thing you meet. */
 export const FIRST_POWER_X = 6500;
 
-/** Remaining headroom at which the budget bar reads full, and pins. */
-export const BAR_CAP = 3000;
-
-/** Fractions of `BAR_CAP` at which the bar changes colour. */
+/**
+ * Fractions of the *ceiling* at which the bar changes colour.
+ *
+ * There used to be a fixed `BAR_CAP` here that the bar was measured against
+ * instead. It went with the old economy, where every pickup raised the ceiling
+ * and the ceiling was never something the player managed. Now that the ceiling
+ * is the second resource, the bar has to be a container — see `barFraction`.
+ */
 export const BAR_WARN = 0.45;
 export const BAR_CRIT = 0.18;
 
@@ -251,3 +313,31 @@ export const GROUND_DASH = 26;
  */
 export const HUD_REFERENCE_H = 560;
 export const HUD_SCALE_MAX = 2.2;
+
+// --- the pickup readout -------------------------------------------------------
+//
+// The word a pickup throws off saying what it did — "+60 MAX TOKENS" — drawn by
+// `main.ts` and animated by `effects.ts`. Pure presentation, and it would sit
+// happily in either of those files except for `FLOAT_LIFE`: `spec/shot-plan`
+// needs it to check that the pickup screenshots open the shutter while a word is
+// still on screen, and a node test cannot import a module that touches the DOM.
+// So the group lives here, together, rather than one number in exile.
+
+/** Base type size, world units. Multiplied by the HUD scale, like the HUD. */
+export const FLOAT_FONT = 19;
+
+/**
+ * Seconds on screen. Deliberately shorter than the time it takes to decide to
+ * read something: it is meant to be caught by an eye that stays on the track,
+ * and a label that outstays that is a label the player has to look away for.
+ */
+export const FLOAT_LIFE = 0.62;
+
+/** The power-up's word is rarer, says more, and is allowed to linger. */
+export const FLOAT_LIFE_POWER = 1;
+
+/** World units the word drifts upward over its life, before the HUD scale. */
+export const FLOAT_RISE = 62;
+
+/** Clear air between the top of the pickup's box and where the word starts. */
+export const FLOAT_LEAD = 16;
