@@ -53,6 +53,8 @@ const SHIELD_FLASH_MS = 90;
 const POWER_ICON = 26;
 /** Base HUD type size, world units. Multiplied by the layout's `hud` scale. */
 const HUD_FONT = 22;
+/** Vertical extent of the HUD block below `hudTop`, before scaling. */
+const HUD_BLOCK = 68;
 /** Base HUD margin and bar height, world units. Also scaled. */
 const HUD_MARGIN = 40;
 const HUD_BAR_H = 22;
@@ -71,6 +73,31 @@ const SHIELD_BAR_W = 0.22;
 const SHIELD_BAR_H = 0.36;
 /** Clear space between the budget bar's bottom edge and the shield bar's top. */
 const SHIELD_BAR_GAP = 8;
+
+// --- the start hint -----------------------------------------------------------
+//
+// What you can press, drawn into the sky while the runner idles. Sized in the
+// same world units as the HUD and multiplied by the same `hud` scale, so it is
+// legible at 390x844 without being a billboard at 1920x1080.
+
+/** Height of a keycap, world units. Everything else derives from it. */
+const HINT_KEY_H = 40;
+/** Type size inside a keycap. */
+const HINT_FONT = 18;
+/** Clear space between one input glyph and the next. */
+const HINT_GAP = 22;
+/** Stroke weight of the drawn outlines. */
+const HINT_LINE = 2;
+/** Inner padding either side of a keycap's label. */
+const HINT_PAD = 14;
+/**
+ * How faint. Low enough to sit behind the game rather than on top of it, high
+ * enough to be the first thing a cold player's eye lands on against the sky,
+ * which is drawn at 7.5%.
+ */
+const HINT_ALPHA = 0.3;
+/** Radius of the touch hint's outermost ripple, as a multiple of a keycap. */
+const HINT_TOUCH = 0.95;
 
 // --- juice ------------------------------------------------------------------
 //
@@ -266,6 +293,12 @@ function start(surface: HTMLCanvasElement, paint: CanvasRenderingContext2D) {
 
   // --- loop ---------------------------------------------------------------
 
+  // Which input the start hint offers. `pointer: coarse` alone would catch a
+  // touchscreen laptop, where the keyboard is still the answer; pairing it with
+  // `hover: none` narrows it to devices that have nothing else. Read per frame,
+  // not once, because a tablet gaining a keyboard flips it mid-session.
+  const handheld = matchMedia("(hover: none) and (pointer: coarse)");
+
   let last = performance.now();
 
   const frame = (now: number) => {
@@ -283,6 +316,7 @@ function start(surface: HTMLCanvasElement, paint: CanvasRenderingContext2D) {
       best,
       now,
       sinceOver,
+      touch: handheld.matches,
     };
 
     // The lockout is the only thing that ever refuses a press, and it refuses
@@ -465,6 +499,13 @@ interface View extends Layout {
   readonly now: number;
   /** Seconds since the run ended. Zero while it hasn't. */
   readonly sinceOver: number;
+  /** True where a finger is the only pointer there is. Chooses the start hint. */
+  readonly touch: boolean;
+}
+
+/** Canvas y of the bottom of the HUD block — bar, then readout, then air. */
+function hudBottom(view: View): number {
+  return view.hudTop + HUD_BLOCK * view.hud;
 }
 
 // --- render ------------------------------------------------------------------
@@ -483,6 +524,10 @@ function render(
   // jumps when you are hit is harder to read at exactly the moment it matters.
   paint.save();
   paint.translate(effects.shakeX(), effects.shakeY());
+
+  // Behind everything the level draws, which is the point: it is scenery the
+  // runner passes in front of, not a panel laid over the game.
+  if (state.status === "idle") drawStartHint(paint, view);
 
   drawGround(paint, state, view);
   drawPickups(paint, state, view);
@@ -526,7 +571,7 @@ function drawSky(paint: CanvasRenderingContext2D, view: View, scroll: number): v
   const bottom = view.groundY - SKY_CLEAR;
   if (bottom < SKY_LINE_H) return;
   const hudFrom = view.hudTop - 10 * view.hud;
-  const hudTo = view.hudTop + (HUD_BAR_H + HUD_FONT + 24) * view.hud;
+  const hudTo = hudBottom(view);
 
   const offset = mod(scroll * SKY_PARALLAX, SKY_SPAN);
   paint.fillStyle = INK;
@@ -700,6 +745,182 @@ function drawCaret(
   if (Math.floor(view.now / CARET_BLINK_MS) % 2 === 1) return;
   paint.fillStyle = INK;
   paint.fillRect(x, bottom - height, height * 0.31, height);
+}
+
+/**
+ * The start hint: the inputs the game answers to, in the sky behind the idle
+ * runner, at a third of full brightness.
+ *
+ * Glyphs rather than a sentence. `plan/03-feel-and-teaching.md` rejected a
+ * `PRESS SPACE` label and that judgement still holds — an imperative line is a
+ * tutorial. A keycap is not: it names the hardware and says nothing about what
+ * the hardware does, which is left to the caret and the confirming hop that
+ * were already doing that job. The only word on screen is the one written on
+ * the key itself.
+ *
+ * It exists at all because the caret alone assumes a player who reads a
+ * blinking block as an invitation — true of a terminal native, and an
+ * assumption rather than a finding for everyone else. The hint costs nothing to
+ * a player who does not need it: it is gone the frame the run begins.
+ */
+function drawStartHint(paint: CanvasRenderingContext2D, view: View): void {
+  const scale = view.hud;
+  // Between the HUD block and the ground, so it collides with neither. 0.42 is
+  // the death screen's fraction — the two full-screen messages the game has
+  // sit on the same line, and switching between them does not move your eye.
+  const top = hudBottom(view);
+  const midY = top + (view.groundY - top) * 0.42;
+
+  paint.save();
+  paint.globalAlpha = HINT_ALPHA;
+  paint.lineWidth = HINT_LINE * scale;
+  paint.strokeStyle = FADED;
+  paint.fillStyle = INK;
+  paint.font = `600 ${HINT_FONT * scale}px ${MONO}`;
+  paint.textAlign = "center";
+  paint.textBaseline = "middle";
+
+  if (view.touch) {
+    drawTouchHint(paint, WORLD_W / 2, midY, HINT_KEY_H * HINT_TOUCH * scale);
+  } else {
+    drawKeyHint(paint, midY, scale);
+  }
+
+  paint.globalAlpha = 1;
+  paint.restore();
+}
+
+/**
+ * Space, up-arrow and left mouse button, centred as one row. The three are laid
+ * out from measured widths rather than from a table of positions, so changing
+ * the type size or the scale cannot leave the row off-centre.
+ */
+function drawKeyHint(
+  paint: CanvasRenderingContext2D,
+  midY: number,
+  scale: number,
+): void {
+  const h = HINT_KEY_H * scale;
+  const gap = HINT_GAP * scale;
+  const top = midY - h / 2;
+
+  // The spacebar is drawn wide because that is what makes it the spacebar and
+  // not a key with "space" written on it.
+  const spaceW = Math.max(
+    paint.measureText("space").width + HINT_PAD * 2 * scale,
+    h * 2.4,
+  );
+  const mouseW = h * 0.68;
+  let x = (WORLD_W - (spaceW + h + mouseW + gap * 2)) / 2;
+
+  drawKeycap(paint, x, top, spaceW, h, scale);
+  paint.fillText("space", x + spaceW / 2, midY);
+  x += spaceW + gap;
+
+  drawKeycap(paint, x, top, h, h, scale);
+  drawUpArrow(paint, x + h / 2, midY, h * 0.5);
+  x += h + gap;
+
+  drawMouse(paint, x, top, mouseW, h, scale);
+}
+
+function drawKeycap(
+  paint: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  scale: number,
+): void {
+  paint.beginPath();
+  paint.roundRect(x, y, w, h, 6 * scale);
+  paint.stroke();
+}
+
+/** Filled, not stroked: at 30% alpha a two-unit outline of an arrow disappears. */
+function drawUpArrow(
+  paint: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  size: number,
+): void {
+  const head = size * 0.58;
+  const stem = size * 0.26;
+  const topY = cy - size / 2;
+  const shoulder = topY + head;
+
+  paint.beginPath();
+  paint.moveTo(cx, topY);
+  paint.lineTo(cx + head, shoulder);
+  paint.lineTo(cx + stem, shoulder);
+  paint.lineTo(cx + stem, cy + size / 2);
+  paint.lineTo(cx - stem, cy + size / 2);
+  paint.lineTo(cx - stem, shoulder);
+  paint.lineTo(cx - head, shoulder);
+  paint.closePath();
+  paint.fill();
+}
+
+/**
+ * A mouse with its left button filled. The outline alone would say "a mouse is
+ * a thing you have"; the filled quadrant is the half of the icon that says
+ * which button, and it is the only part drawn in the live colour.
+ */
+function drawMouse(
+  paint: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  scale: number,
+): void {
+  // Rounder at the top than the bottom, which is the whole silhouette.
+  const body = (): void => {
+    paint.beginPath();
+    paint.roundRect(x, y, w, h, [w / 2, w / 2, w * 0.38, w * 0.38]);
+  };
+  // The button's lower edge. Deep enough that the rounded top does not clip the
+  // fill down to a wedge — at 0.42 of the height it read as a chipped corner.
+  const split = h * 0.5;
+
+  paint.save();
+  body();
+  paint.clip();
+  paint.fillRect(x, y, w / 2 - scale / 2, split);
+  paint.restore();
+
+  body();
+  paint.stroke();
+  // The right button, which the fill only implies. Without this line the icon
+  // is a mouse with a dark top-right corner rather than one with two buttons.
+  paint.beginPath();
+  paint.moveTo(x + w / 2 + scale / 2, y + scale);
+  paint.lineTo(x + w / 2 + scale / 2, y + split);
+  paint.lineTo(x + w - scale, y + split);
+  paint.stroke();
+}
+
+/**
+ * The handheld hint: a fingertip with two ripples off it. Static — the caret
+ * beside the runner is already the animated "waiting for you" signal, and a
+ * second thing pulsing next to it competes with the first rather than
+ * reinforcing it.
+ */
+function drawTouchHint(
+  paint: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  outer: number,
+): void {
+  paint.beginPath();
+  paint.arc(cx, cy, outer * 0.3, 0, Math.PI * 2);
+  paint.fill();
+
+  for (const ring of [0.65, 1]) {
+    paint.beginPath();
+    paint.arc(cx, cy, outer * ring, 0, Math.PI * 2);
+    paint.stroke();
+  }
 }
 
 /** One colour per bar level. The level itself is decided in `rules.ts`. */

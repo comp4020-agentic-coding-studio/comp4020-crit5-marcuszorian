@@ -149,13 +149,31 @@ function serveDist(): Server {
 }
 
 async function capture(cdp: Client, shot: Shot): Promise<void> {
+  const handheld = shot.width < 600;
   await cdp.send("Emulation.setDeviceMetricsOverride", {
     width: shot.width,
     height: shot.height,
     deviceScaleFactor: shot.dpr,
     // Mobile emulation is what makes 390x844 behave like a phone rather than
     // like a very narrow desktop: touch events, and a real visual viewport.
-    mobile: shot.width < 600,
+    mobile: handheld,
+  });
+  // ...but `mobile` alone leaves `hover` and `pointer` reporting a desktop
+  // mouse, so a page that branches on `(pointer: coarse)` — the start hint
+  // does — photographs its *desktop* branch at 390x844 and the phone one is
+  // never seen at all. DevTools' own device mode sets these separately; so do
+  // we, and explicitly both ways, because the override outlives a navigation.
+  await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: handheld });
+  await cdp.send("Emulation.setEmulatedMedia", {
+    features: handheld
+      ? [
+          { name: "hover", value: "none" },
+          { name: "pointer", value: "coarse" },
+        ]
+      : [
+          { name: "hover", value: "hover" },
+          { name: "pointer", value: "fine" },
+        ],
   });
   await cdp.send("Page.navigate", { url: BASE });
   await cdp.loaded();
