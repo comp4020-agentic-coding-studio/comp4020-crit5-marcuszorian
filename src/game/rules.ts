@@ -478,12 +478,23 @@ function spawn(state: GameState, distance: number): Spawned {
         ? TOKEN_RUN_MAX
         : TOKEN_RUN_MIN + Math.floor(count.value * (TOKEN_RUN_MAX - TOKEN_RUN_MIN + 1));
 
+    // A power-up placed on an earlier frame can sit inside the run about to be
+    // laid down here: the two cursors both stop just past the horizon, so the
+    // one that ran first can leave something a few units short of where the
+    // other starts. The power loop below cannot see these tokens yet, so this
+    // is the half of the check that has to happen on this side.
+    const powers = pickups.filter((pickup) => pickup.kind === "power");
+
     let x = nextTokenAt;
     for (let i = 0; i < run; i += 1) {
       const token = pickupAt("token", x);
-      // A ground token inside an obstacle is uncollectable, and looks like a
-      // bug rather than a choice. Skip it; the run just has a hole in it.
-      if (clearOfObstacles(token, committed)) pickups.push(token);
+      // A ground token inside an obstacle — or inside a power-up, which stands
+      // at the same height and would swallow the coin behind its icon — is
+      // uncollectable as a separate thing, and looks like a bug rather than a
+      // choice. Skip it; the run just has a hole in it.
+      if (clearOfObstacles(token, committed) && clearOfPickups(token, powers)) {
+        pickups.push(token);
+      }
       x += TOKEN_SPACING;
     }
 
@@ -496,9 +507,13 @@ function spawn(state: GameState, distance: number): Spawned {
   let nextPowerAt = state.nextPowerAt;
   while (nextPowerAt <= horizon) {
     const power = pickupAt("power", nextPowerAt);
-    // Nudged clear of an obstacle rather than skipped: one every few tens of
-    // seconds is too rare to drop because the dice put it inside a wall.
-    if (!clearOfObstacles(power, committed)) {
+    // Nudged clear rather than skipped: one every few tens of seconds is too
+    // rare to drop because the dice put it inside a wall — or on top of a coin,
+    // where the two icons occupy the same square of ground and the player is
+    // shown one pickup where there are two. High tokens are exempt without
+    // being special-cased: the test is box overlap, and they hang out of reach
+    // above the power-up's box rather than in it.
+    if (!clearOfObstacles(power, committed) || !clearOfPickups(power, pickups)) {
       nextPowerAt += TOKEN_CLEARANCE;
       continue;
     }
@@ -511,15 +526,30 @@ function spawn(state: GameState, distance: number): Spawned {
   return { obstacles, pickups, nextObstacleAt, nextTokenAt, nextPowerAt, seed };
 }
 
-function clearOfObstacles(
-  pickup: Pickup,
-  obstacles: readonly Obstacle[],
-): boolean {
-  const room: Box = {
+/** The pickup's own box, widened by a token's width of breathing room. */
+function roomAround(pickup: Pickup): Box {
+  return {
     x: pickup.x - TOKEN_CLEARANCE,
     y: pickup.y,
     w: pickup.w + TOKEN_CLEARANCE * 2,
     h: pickup.h,
   };
+}
+
+function clearOfObstacles(
+  pickup: Pickup,
+  obstacles: readonly Obstacle[],
+): boolean {
+  const room = roomAround(pickup);
   return !obstacles.some((obstacle) => overlaps(room, obstacleBox(obstacle)));
+}
+
+/**
+ * True when nothing in `others` is inside the pickup's room. Only ever called
+ * with lists a pickup of that kind must not land on — never with the run of
+ * ground tokens a token is part of, which would reject its own neighbours.
+ */
+function clearOfPickups(pickup: Pickup, others: readonly Pickup[]): boolean {
+  const room = roomAround(pickup);
+  return !others.some((other) => overlaps(room, other));
 }

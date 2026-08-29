@@ -34,6 +34,7 @@ import {
   invulnFraction,
   invulnerable,
   nextRandom,
+  overlaps,
   pickupAt,
   remainingOf,
   speedFor,
@@ -319,6 +320,43 @@ describe("the track", () => {
         }
       }
     }
+  });
+
+  // The power-up stands on the ground at the same height as a run of coins, and
+  // its icon is drawn over the top of one, so a coin underneath it is a pickup
+  // the player is never shown. Either cursor can be the one that got there
+  // first, so this sweeps them past each other in both orders.
+  it("never puts a power-up and a ground token in the same place", () => {
+    let bothSeen = 0;
+
+    for (let powerAt = 900; powerAt < 1450; powerAt += 43) {
+      for (let tokenAt = 900; tokenAt < 1450; tokenAt += 31) {
+        // Short enough that nothing placed at 900 or beyond has scrolled past
+        // the runner and out of `pickups` by the time it is inspected.
+        const track = play(
+          quiet({ nextTokenAt: tokenAt, nextPowerAt: powerAt }),
+          1.5,
+        );
+
+        const powers = track.pickups.filter((p) => p.kind === "power");
+        const tokens = track.pickups.filter((p) => p.kind === "token");
+        if (powers.length > 0 && tokens.length > 0) bothSeen += 1;
+
+        for (const power of powers) {
+          for (const token of tokens) {
+            expect({
+              powerAt,
+              tokenAt,
+              collides: overlaps(power, token),
+            }).toMatchObject({ collides: false });
+          }
+        }
+      }
+    }
+
+    // A clearance sweep over an empty track passes no matter what the spawner
+    // does, so the sweep has to say how much track it actually walked.
+    expect(bothSeen).toBeGreaterThan(100);
   });
 });
 
