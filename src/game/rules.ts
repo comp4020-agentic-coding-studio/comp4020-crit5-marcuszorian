@@ -204,6 +204,25 @@ export function grounded(state: GameState): boolean {
   return state.y <= GROUND_EPS;
 }
 
+/**
+ * How far through a jump arc the runner is: 0 at take-off, 0.5 at the apex, 1
+ * at the landing. Zero whenever there is no jump to be through.
+ *
+ * The renderer spins the character a quarter turn over this, Geometry Dash
+ * style, so it lands on a new face each hop. Read from `vy` rather than from a
+ * clock because every jump starts on the ground at exactly `JUMP_V` — velocity
+ * alone locates the runner in the arc, which means no timer to keep, nothing to
+ * reset, and a replayed seed spinning the same way as the run that produced it.
+ * A death mid-air freezes `vy`, and the character freezes at that angle with it.
+ *
+ * Lives here rather than in `main.ts` for the usual reason: it is arithmetic on
+ * the state, so it is something a node test can hold an opinion about.
+ */
+export function airProgress(state: GameState): number {
+  if (state.y <= 0) return 0;
+  return Math.min(1, Math.max(0, (JUMP_V - state.vy) / (2 * JUMP_V)));
+}
+
 /** True while a power-up is still shielding the runner. */
 export function invulnerable(state: GameState): boolean {
   return state.elapsed < state.invulnUntil;

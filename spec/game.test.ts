@@ -7,11 +7,18 @@ import {
   JUMP_V,
   OBSTACLE_H,
   OBSTACLE_W,
+  RUNNER_H,
   RUNNER_W,
   RUNNER_X,
   START_BUDGET,
   TOKEN_CLEARANCE,
 } from "../src/game/config.ts";
+import {
+  ARM_OVERHANG,
+  RUNNER_SPRITE,
+  groundedReach,
+  spriteBounds,
+} from "../src/game/sprite.ts";
 import type {
   BarLevel,
   GameState,
@@ -20,6 +27,7 @@ import type {
   PickupKind,
 } from "../src/game/rules.ts";
 import {
+  airProgress,
   barFraction,
   barLevel,
   createGame,
@@ -509,5 +517,131 @@ describe("sensor: the simulation is deterministic", () => {
   it("draws from the seed rather than from the ambient world", () => {
     expect(nextRandom(1).value).not.toBe(nextRandom(2).value);
     expect(nextRandom(1)).toEqual(nextRandom(1));
+  });
+});
+
+describe("the runner's spin", () => {
+  it("runs 0 to 1 across exactly one jump arc, and rests at 0", () => {
+    const still = quiet();
+    expect(airProgress(still)).toBe(0);
+
+    let state = step(still, { jump: true }, DT);
+    const seen: number[] = [];
+    for (let t = 0; t < airTime * 2 && state.y > 0; t += DT) {
+      seen.push(airProgress(state));
+      state = step(state, { jump: false }, DT);
+    }
+
+    // A quarter turn that stalled, reversed or overshot would all look wrong on
+    // screen in a way no other assertion here would catch.
+    expect(seen[0]).toBeLessThan(DT / airTime + 0.01);
+    expect(seen.at(-1)).toBeGreaterThan(1 - 2 * (DT / airTime) - 0.01);
+    for (let i = 1; i < seen.length; i += 1) {
+      // Reported as an object so a failure names the frame it turned around on,
+      // rather than saying `false !== true` somewhere in a forty-frame arc.
+      expect({
+        frame: i,
+        prev: seen[i - 1]!,
+        next: seen[i]!,
+        rising: seen[i]! > seen[i - 1]!,
+      }).toMatchObject({ rising: true });
+    }
+
+    // Landed: back on its feet, and the renderer stops adding to the angle.
+    expect(state.y).toBe(0);
+    expect(airProgress(state)).toBe(0);
+  });
+
+  it("reads the apex as the halfway point of the turn", () => {
+    // Derived from the physics, not from a stopwatch: the apex is where `vy`
+    // crosses zero, so half the arc has to be half the spin.
+    let state = step(quiet(), { jump: true }, DT);
+    while (state.vy > 0) state = step(state, { jump: false }, DT);
+    expect(airProgress(state)).toBeCloseTo(0.5, 1);
+  });
+});
+
+// Sensor, not a contract: the drawn character and the box it is judged against
+// are declared in two different files, and nothing else in `check` would notice
+// them drifting apart. A sprite narrower than its hitbox is the bug that reads
+// as "the game cheated" — you die to a gap you could see through.
+describe("sensor: the runner's art fits the box it collides in", () => {
+  const bounds = spriteBounds();
+
+  it("fills its collision box exactly, top to bottom and edge to edge", () => {
+    expect(bounds.top).toBe(0);
+    expect(bounds.bottom).toBe(RUNNER_H);
+    // Only the arm nubs leave the box, and only sideways: art wider than the
+    // hitbox is a graze the player survives, which is the forgiving direction.
+    expect(bounds.left).toBe(-ARM_OVERHANG);
+    expect(bounds.right).toBe(RUNNER_W + ARM_OVERHANG);
+    expect(
+      RUNNER_SPRITE.some(
+        (rect) => rect.ink === "body" && rect.x === 0 && rect.w === RUNNER_W,
+      ),
+    ).toBe(true);
+  });
+
+  // Regression, and the reason `groundedReach` exists. The first version of the
+  // spin pivoted on RUNNER_H / 2, which is right at rest and wrong the moment
+  // the character is on its side: a quarter turn stands the arm nubs on end and
+  // the lower one goes through the floor. Nothing in `check` saw it — a canvas
+  // is not text — and it took a screenshot to find. So it is a sweep now, and
+  // it reports the angle rather than saying `false !== true`.
+  it("never sinks below its own feet, at any angle of the spin", () => {
+    for (let turn = 0; turn <= 96; turn += 1) {
+      const angle = (turn / 96) * Math.PI * 2;
+      const reach = groundedReach(angle);
+      const sin = Math.sin(angle);
+      const cos = Math.cos(angle);
+
+      // Every corner of every drawn rectangle, through the same transform the
+      // renderer applies: pivot on the box centre, turn, then drop by `reach`.
+      // Measured downward from the ground line, so positive is buried.
+      let deepest = Number.NEGATIVE_INFINITY;
+      for (const rect of RUNNER_SPRITE) {
+        for (const cx of [rect.x, rect.x + rect.w]) {
+          for (const cy of [rect.y, rect.y + rect.h]) {
+            const px = cx - RUNNER_W / 2;
+            const py = cy - RUNNER_H / 2;
+            deepest = Math.max(deepest, px * sin + py * cos - reach);
+          }
+        }
+      }
+
+      // Two different claims, and only one of them is "touching".
+      //
+      // Buried is never allowed: that is the bug this test is named after, and
+      // it is what a player sees as the character wading through the floor.
+      //
+      // Resting exactly on the line is only required at the quarter turns,
+      // because those are the only angles the character is ever still at. In
+      // between, `groundedReach` measures the sprite's *bounding box*, whose
+      // corners are empty air — the arm nubs and the torso do not meet at one —
+      // so the silhouette floats by up to a third of its height at 45°. That
+      // happens at the apex of a jump, 150 units up, where nothing can see it.
+      const degrees = Math.round((angle * 180) / Math.PI);
+      const resting = degrees % 90 === 0;
+      expect({
+        degrees,
+        gap: Number(deepest.toFixed(6)),
+        buried: deepest > 1e-9,
+        planted: !resting || Math.abs(deepest) < 1e-9,
+      }).toMatchObject({ buried: false, planted: true });
+    }
+  });
+
+  it("keeps the eyes inside the torso, whatever the box becomes", () => {
+    for (const eye of RUNNER_SPRITE.filter((rect) => rect.ink === "hole")) {
+      expect({
+        eye,
+        box: { w: RUNNER_W, h: RUNNER_H },
+        inside:
+          eye.x >= 0 &&
+          eye.x + eye.w <= RUNNER_W &&
+          eye.y >= 0 &&
+          eye.y + eye.h <= RUNNER_H,
+      }).toMatchObject({ inside: true });
+    }
   });
 });

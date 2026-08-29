@@ -24,6 +24,7 @@ import {
 } from "../game/config.ts";
 import type { BarLevel, GameState, Pickup, PickupKind } from "../game/rules.ts";
 import {
+  airProgress,
   barFraction,
   barLevel,
   createGame,
@@ -32,6 +33,7 @@ import {
   invulnerable,
   step,
 } from "../game/rules.ts";
+import { RUNNER_SPRITE, groundedReach } from "../game/sprite.ts";
 import { createSound } from "./audio.ts";
 import type { Sound, Voice } from "./audio.ts";
 import { createEffects } from "./effects.ts";
@@ -42,17 +44,36 @@ const INK = "#7dfda6";
 const FADED = "#4c8f68";
 const DIM = "#1d3527";
 const PAPER = "#05100a";
-// Four colours, four meanings, and nothing borrows another's: green is you and
-// the world, gold is worth taking, red kills you, cyan is the power-up.
+// Five colours, five meanings, and nothing borrows another's: green is the
+// world, terracotta is *you*, gold is worth taking, red kills you, cyan is the
+// power-up. Green used to be both you and the world; giving the runner its own
+// hue is strictly clearer, because the one thing on screen you steer is now the
+// one thing on screen in its colour.
 const WARN = "#f2d857";
 const CRIT = "#ff6b57";
 const SHIELD = "#6be3ff";
+/** The character's own terracotta. Warm, and the nearest thing to red here. */
+const CLAUDE = "#d97757";
 /** Milliseconds per phase of the shielded runner's flash. */
 const SHIELD_FLASH_MS = 90;
 /** Drawn size of the power-up, world units. Its collision box is larger. */
 const POWER_ICON = 26;
 /** Base HUD type size, world units. Multiplied by the layout's `hud` scale. */
 const HUD_FONT = 22;
+/**
+ * The score's caption. Smaller and dimmer than the number it names, because it
+ * answers "what is this?" once, for a player who has never seen the game, and
+ * then has to get out of the way of the only thing on the line that changes.
+ *
+ * It exists because the bare number was ambiguous in exactly the wrong
+ * direction: a rising figure beside a draining bar reads as points, and it is
+ * the opposite — the tokens the run has burned. Naming it is the difference
+ * between "I scored 4000" and "I spent 4000", and the second one is the game.
+ */
+const HUD_LABEL = "TOKENS USED";
+const HUD_LABEL_FONT = 16;
+/** Clear space between the caption and the number it names. */
+const HUD_LABEL_GAP = 12;
 /** Vertical extent of the HUD block below `hudTop`, before scaling. */
 const HUD_BLOCK = 68;
 /** Base HUD margin and bar height, world units. Also scaled. */
@@ -198,6 +219,8 @@ function start(surface: HTMLCanvasElement, paint: CanvasRenderingContext2D) {
   let pressed = false;
   let idleDrift = 0;
   let best = readNumber(BEST_KEY);
+  /** Quarter-turns banked by landings so far this run. See `View.spin`. */
+  let spin = 0;
   /** Seconds since the run ended; drives the fade and the lockout. */
   let sinceOver = 0;
 
@@ -314,6 +337,7 @@ function start(surface: HTMLCanvasElement, paint: CanvasRenderingContext2D) {
       worldH,
       idleDrift,
       best,
+      spin,
       now,
       sinceOver,
       touch: handheld.matches,
@@ -329,6 +353,15 @@ function start(surface: HTMLCanvasElement, paint: CanvasRenderingContext2D) {
     const before = state;
     state = step(state, input, dt);
     sinceOver = state.status === "over" ? sinceOver + dt : 0;
+
+    // A quarter turn is banked by the landing that ends it, and the count
+    // starts over with the run. Written onto the view after the step, like
+    // `best`, because the landing is a fact about the state the step produced.
+    if (before.status !== "running" && state.status === "running") spin = 0;
+    else if (state.status === "running" && before.y > 0 && state.y === 0) {
+      spin += 1;
+    }
+    view.spin = spin;
 
     react(before, state, input, view, sound, effects);
     if (before.status !== "over" && state.status === "over") {
@@ -412,7 +445,7 @@ function react(
     effects.burst({
       x,
       y,
-      colour: FADED,
+      colour: CLAUDE,
       count: 22,
       speed: 170,
       life: 1,
@@ -496,6 +529,14 @@ interface View extends Layout {
   readonly worldH: number;
   readonly idleDrift: number;
   best: number;
+  /**
+   * Quarter-turns the runner has already banked. The only piece of the spin
+   * that needs memory — `airProgress` reads the current arc straight off the
+   * state, but no single state can say how many arcs came before it — so it is
+   * carried on the view alongside `best`, and written after the step for the
+   * same reason `best` is.
+   */
+  spin: number;
   readonly now: number;
   /** Seconds since the run ended. Zero while it hasn't. */
   readonly sinceOver: number;
@@ -706,6 +747,15 @@ function drawPower(
   );
 }
 
+/**
+ * The character, spun like a Geometry Dash cube: a quarter turn over each jump,
+ * banked on landing, so every hop puts it down on a different face and it
+ * carries on running upside down without comment. `airProgress` supplies the
+ * fraction and `view.spin` the completed turns.
+ *
+ * The shape itself comes from `src/game/sprite.ts` — this only decides what
+ * colour it is this frame and where the rotation puts it.
+ */
 function drawRunner(
   paint: CanvasRenderingContext2D,
   state: GameState,
@@ -716,14 +766,28 @@ function drawRunner(
   // longer; this says that it is you it is happening to.
   const shielded =
     invulnerable(state) && Math.floor(view.now / SHIELD_FLASH_MS) % 2 === 0;
+  const body = state.status === "over" ? DIM : shielded ? SHIELD : CLAUDE;
 
-  paint.fillStyle = state.status === "over" ? DIM : shielded ? SHIELD : INK;
-  paint.fillRect(
-    RUNNER_X,
-    view.groundY - state.y - RUNNER_H,
-    RUNNER_W,
-    RUNNER_H,
+  const angle = (view.spin + airProgress(state)) * (Math.PI / 2);
+
+  // Pivot on the box's centre, lifted by the *rotated sprite's* half-height so
+  // the character's lowest point rides the ground line at every angle rather
+  // than sinking through it on its side. `groundedReach` owns that arithmetic,
+  // and reduces to the old flat RUNNER_H / 2 at rest.
+  paint.save();
+  paint.translate(
+    RUNNER_X + RUNNER_W / 2,
+    view.groundY - state.y - groundedReach(angle),
   );
+  paint.rotate(angle);
+  paint.translate(-RUNNER_W / 2, -RUNNER_H / 2);
+
+  for (const rect of RUNNER_SPRITE) {
+    paint.fillStyle = rect.ink === "hole" ? PAPER : body;
+    paint.fillRect(rect.x, rect.y, rect.w, rect.h);
+  }
+
+  paint.restore();
 }
 
 /**
@@ -949,14 +1013,31 @@ function drawBudget(
 
   drawShield(paint, state, view, margin, width, height);
 
+  // Both lines are drawn from their middles onto one shared centreline, which
+  // is the only way two different type sizes actually sit level: aligning their
+  // tops leaves the smaller one riding high, and aligning baselines by hand
+  // means guessing at a font's ascent. The centreline is half a line below
+  // where the score's top edge used to be, so the readout has not moved.
+  const centre = view.hudTop + height + (12 + HUD_FONT / 2) * view.hud;
+  const score = String(Math.floor(state.used));
+
   paint.fillStyle = INK;
   paint.font = `600 ${HUD_FONT * view.hud}px ${MONO}`;
   paint.textAlign = "right";
-  paint.textBaseline = "top";
+  paint.textBaseline = "middle";
+  paint.fillText(score, WORLD_W - margin, centre);
+  // Measured while the score's own font is still set, and measured rather than
+  // positioned by hand: the number is 1 digit at the start of a run and 5 by
+  // the end of a good one, so a caption at a fixed x would either collide with
+  // it or sit in a puddle of space waiting not to.
+  const scoreW = paint.measureText(score).width;
+
+  paint.font = `600 ${HUD_LABEL_FONT * view.hud}px ${MONO}`;
+  paint.fillStyle = FADED;
   paint.fillText(
-    String(Math.floor(state.used)),
-    WORLD_W - margin,
-    view.hudTop + height + 12 * view.hud,
+    HUD_LABEL,
+    WORLD_W - margin - scoreW - HUD_LABEL_GAP * view.hud,
+    centre,
   );
 }
 
@@ -1014,9 +1095,16 @@ function drawEnding(
   paint.font = `700 ${72 * scale}px ${MONO}`;
   paint.fillText(String(Math.floor(state.used)), WORLD_W / 2, midY);
 
+  // The caption goes *under* the number here, where the HUD puts it beside one.
+  // Above would be the natural reading order, and there is no room for it: on a
+  // 390x844 phone the HUD block reaches to within a caption's height of the big
+  // number, and two pieces of text would overlap through the 82% fade.
   paint.fillStyle = FADED;
+  paint.font = `600 ${HUD_LABEL_FONT * scale}px ${MONO}`;
+  paint.fillText(HUD_LABEL, WORLD_W / 2, midY + 48 * scale);
+
   paint.font = `600 ${HUD_FONT * scale}px ${MONO}`;
-  paint.fillText(`BEST ${Math.floor(view.best)}`, WORLD_W / 2, midY + 62 * scale);
+  paint.fillText(`BEST ${Math.floor(view.best)}`, WORLD_W / 2, midY + 88 * scale);
 
   // The same caret that invited the first press invites the next one. Without
   // it the death screen is two numbers and no offer, and a cold player has

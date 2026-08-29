@@ -26,8 +26,22 @@ export const JUMP_V = 900;
 /** The runner's fixed horizontal position. The world scrolls past it. */
 export const RUNNER_X = 150;
 
-export const RUNNER_W = 34;
-export const RUNNER_H = 52;
+/**
+ * The runner's collision box — and, exactly, the size of the sprite drawn in
+ * it. `src/game/sprite.ts` is the Claude Code character at one world unit per
+ * source pixel, so these two numbers are the character's own dimensions rather
+ * than round ones, and `spec/game.test.ts` asserts the art still fills the box.
+ *
+ * It used to be a 34x52 bar. Adopting the character's proportions made the
+ * runner 53% wider and slightly shorter, which is a balance change and not just
+ * an art one: the runner now spends (OBSTACLE_W + RUNNER_W) / speed alongside
+ * each obstacle instead of a third less, so the window of press times that
+ * clears one narrows from ~380ms to ~320ms at the starting speed. Still a wide
+ * window, and the game is meant to get harder — but that is the number to watch
+ * if it ever stops feeling fair.
+ */
+export const RUNNER_W = 52;
+export const RUNNER_H = 45;
 
 export const OBSTACLE_W = 26;
 export const OBSTACLE_H = 54;
@@ -100,8 +114,8 @@ export const TOKEN_VALUE = 60;
 
 /**
  * High tokens sit near the top of a jump. Standing, the runner's head reaches
- * `RUNNER_H` (52), so anything above that is unreachable; the jump apex is
- * `JUMP_V^2 / 2|GRAVITY|` ≈ 156, putting the runner's head at ~208. 150 is
+ * `RUNNER_H` (45), so anything above that is unreachable; the jump apex is
+ * `JUMP_V^2 / 2|GRAVITY|` ≈ 156, putting the runner's head at ~201. 150 is
  * therefore comfortably in the air and impossible on the ground.
  */
 export const HIGH_TOKEN_Y = 150;
