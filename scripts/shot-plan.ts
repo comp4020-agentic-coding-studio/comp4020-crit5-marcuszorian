@@ -42,7 +42,7 @@ const CARD = { width: 1200, height: 630, dpr: 1 };
 // fixed by `FIRST_TOKEN_X` and `FIRST_OBSTACLE_X` and therefore the same every
 // run. They are also tuned against the *speed*, and that is the trap: the
 // second press is a jump over the first obstacle, and a balance pass that moves
-// SPEED_BASE moves when that obstacle arrives. Nothing in `check` notices — the
+// SPEED_START moves when that obstacle arrives. Nothing in `check` notices — the
 // runner dies, and the file called `desktop-run.png` quietly becomes a picture
 // of the death screen. That happened once already, which is why the schedule is
 // now derived rather than written down:

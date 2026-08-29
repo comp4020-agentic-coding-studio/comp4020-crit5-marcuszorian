@@ -485,9 +485,14 @@ function react(
       life: pickup.kind === "power" ? FLOAT_LIFE_POWER : FLOAT_LIFE,
       rise: FLOAT_RISE * view.hud,
     };
+    const label = PICKUP_LABEL[pickup.kind];
+    const render = (total: number): string => `+${total} ${label}`;
     effects.float({
       ...word,
-      text: `+${pickupValue(pickup.kind)} ${PICKUP_LABEL[pickup.kind]}`,
+      text: render(pickupValue(pickup.kind)),
+      // Keyed by kind, so a run of ground tokens is one word counting up and a
+      // high token taken on the way through it still gets its own line.
+      tally: { key: pickup.kind, amount: pickupValue(pickup.kind), render },
     });
     if (pickup.kind === "power") effects.float({ ...word, text: POWER_EXTRA });
     sound.play(voiceFor(pickup.kind));

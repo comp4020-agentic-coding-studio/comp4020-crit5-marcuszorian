@@ -6,7 +6,7 @@ import type { Status } from "../src/game/rules.ts";
 import { createGame, remainingOf, step } from "../src/game/rules.ts";
 
 // A sensor, not a contract test. It answers a failure this repo actually had:
-// a balance pass moved SPEED_BASE, the first obstacle started arriving 300ms
+// a balance pass moved the opening speed, the first obstacle started arriving 300ms
 // earlier, and the hand-tuned second press in `pnpm shots` became too late to
 // clear it. Every check stayed green — they parse `dist/` as text — and
 // `pnpm shots` stayed green too, because it asserts nothing about the picture
@@ -101,7 +101,7 @@ describe("the screenshot schedule still photographs what it says it does", () =>
    * *after* a collection and *before* the word it produced has expired.
    *
    * Both halves matter. Too early and the frame is empty track; too late — which
-   * is what a balance pass on `TOKEN_SPACING` or `SPEED_BASE` would cause — and
+   * is what a balance pass on `TOKEN_SPACING` or `SPEED_START` would cause — and
    * the file is a perfectly good run frame with nothing in it worth the name.
    */
   it("catches a pickup word still on screen in the -pickup shots", () => {

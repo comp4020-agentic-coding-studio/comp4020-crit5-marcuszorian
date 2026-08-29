@@ -4,6 +4,7 @@ import {
   GRAVITY,
   HIGH_TOKEN_H,
   HIGH_TOKEN_LEAD,
+  HIGH_TOKEN_VALUE,
   HIGH_TOKEN_Y,
   INVULN_MS,
   JUMP_V,
@@ -12,6 +13,8 @@ import {
   RUNNER_H,
   RUNNER_W,
   RUNNER_X,
+  SPEED_MAX,
+  SPEED_START,
   START_BUDGET,
   START_TOKENS,
   TOKEN_CLEARANCE,
@@ -224,6 +227,71 @@ describe("speed", () => {
   it("increases monotonically with budget", () => {
     for (let budget = 0; budget < 20000; budget += 250) {
       expect(speedFor(budget + 250)).toBeGreaterThan(speedFor(budget));
+    }
+  });
+
+  // The three below pin the *shape* of that increase — a curve that starts
+  // where the rest of the game's timings assume, ramps hardest while the player
+  // is still learning the jump, and eases toward a top end instead of running
+  // away past it. None of them names a speed: they read the constants and
+  // assert the relationships between them, so a balance pass on SPEED_MAX or
+  // SPEED_CURVE moves the game and leaves the suite meaning what it said.
+
+  /**
+   * Load-bearing well beyond this file. `scripts/shot-plan.ts` times the
+   * screenshots off `speedFor(START_BUDGET)`, the first obstacle's arrival is
+   * measured against it, and the RUNNER_W note in `config.ts` quotes a press
+   * window derived from it. Reshaping the curve had to leave its own origin
+   * alone, and this is what says so.
+   */
+  it("opens at the speed the rest of the game is timed against", () => {
+    expect(speedFor(START_BUDGET)).toBe(SPEED_START);
+  });
+
+  /**
+   * The curve leans into `SPEED_MAX` rather than through it. 100k is ~33x the
+   * opening ceiling and some two orders of magnitude past anything a run
+   * reaches — the point being that there is no budget a player can earn that
+   * takes the game faster than the number in `config.ts`.
+   *
+   * The second assertion is the other half, and the one that stops SPEED_MAX
+   * from quietly becoming a decoration: the top end has to be somewhere the
+   * curve actually goes, not an asymptote it creeps at.
+   */
+  it("leans into a top end no reachable ceiling passes", () => {
+    for (const budget of [START_BUDGET, 10_000, 30_000, 100_000]) {
+      expect({ budget, below: speedFor(budget) < SPEED_MAX }).toEqual({
+        budget,
+        below: true,
+      });
+    }
+    expect(SPEED_MAX - speedFor(100_000)).toBeLessThan(1);
+  });
+
+  /**
+   * Concavity, which is the whole difference between this curve and the line it
+   * replaced: the same pickup is worth more speed early than late. Swept a high
+   * token at a time, because a high token is the increment the game actually
+   * deals in, and reported with its budget so a failure names where the curve
+   * stopped easing rather than saying `false !== true`.
+   *
+   * Note what this does *not* say — that a late pickup is worth less. It is
+   * worth exactly as much: `HIGH_TOKEN_VALUE` of ceiling, and ceiling is what
+   * keeps you alive. Only the difficulty it drags along behind it tails off.
+   */
+  it("buys less speed the higher the ceiling already is", () => {
+    let previous = Infinity;
+    for (
+      let budget = START_BUDGET;
+      budget < 30_000;
+      budget += HIGH_TOKEN_VALUE
+    ) {
+      const gained = speedFor(budget + HIGH_TOKEN_VALUE) - speedFor(budget);
+      expect({ budget, easing: gained < previous }).toEqual({
+        budget,
+        easing: true,
+      });
+      previous = gained;
     }
   });
 });

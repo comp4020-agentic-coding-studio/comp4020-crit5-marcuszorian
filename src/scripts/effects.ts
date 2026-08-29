@@ -67,6 +67,21 @@ export interface FloatSpec {
    * showing it calmly.
    */
   readonly calm?: boolean;
+  /**
+   * Makes the word a running total instead of a new line. A pickup collected
+   * within `FLOAT_STACK_MS` of one with the same `key`, in the same place, adds
+   * its `amount` to the word already on screen and re-renders it — so a run of
+   * six coins is one word counting up rather than six words fighting for the
+   * same square of sky.
+   *
+   * `render` is the caller's, because the wording is the caller's: this file
+   * knows the word is a total and nothing else about what it says.
+   */
+  readonly tally?: {
+    readonly key: string;
+    readonly amount: number;
+    readonly render: (total: number) => string;
+  };
 }
 
 export interface Effects {
@@ -87,6 +102,10 @@ interface Floater extends FloatSpec {
   y: number;
   life: number;
   ttl: number;
+  text: string;
+  rise: number;
+  /** What `tally.render` was last given. Zero for a word that is not a total. */
+  total: number;
 }
 
 /**
@@ -111,9 +130,19 @@ const FLOAT_FROM = 0.4;
 
 /**
  * Two floaters born this close together — seconds apart, and world units apart
- * horizontally — are the same moment, so the later one is stacked above the
- * earlier instead of printed over it. A run of ground tokens is collected about
- * 0.14s apart, so without this the whole run is one illegible smear.
+ * horizontally — are the same moment, and are not printed over each other. A run
+ * of ground tokens is collected about 0.14s apart, so without this the whole run
+ * is one illegible smear.
+ *
+ * Which of the two answers applies depends on whether they are the same *kind*
+ * of thing. Same key: they merge, and the word counts up (see `tally`). Different
+ * keys — a high token taken on the way through a run of ground ones — cannot be
+ * summed, so the later one takes the rung above.
+ *
+ * The ladder used to carry the same-key case too, and the picture is what ruled
+ * it out: a word rises further over its life than one rung is tall, so the
+ * bottom of a six-coin run was legible and the top three were on top of each
+ * other. A rung is for the rare collision, not for the common one.
  */
 const FLOAT_STACK_MS = 0.3;
 const FLOAT_STACK_X = 90;
@@ -176,22 +205,50 @@ export function createEffects(): Effects {
   };
 
   const float = (spec: FloatSpec): void => {
+    const together =
+      clock - stackedAt < FLOAT_STACK_MS &&
+      Math.abs(spec.x - stackedX) < FLOAT_STACK_X;
+    stackedAt = clock;
+    stackedX = spec.x;
+
+    const tally = spec.tally;
+    const merge = tally
+      ? floaters.find(
+          (f) =>
+            f.tally?.key === tally.key &&
+            Math.abs(f.x - spec.x) < FLOAT_STACK_X &&
+            f.ttl - f.life < FLOAT_STACK_MS,
+        )
+      : undefined;
+
+    if (merge && tally) {
+      // Frozen where it had got to, rather than restarted from the pickup: the
+      // word has already travelled, and dropping it back down to re-run the
+      // climb on every coin is a twitch, not an animation. Baking the travel
+      // into `y` and zeroing the rise leaves it hanging exactly where the eye
+      // last found it, popping and counting up in place.
+      merge.y -= merge.rise * easeOutCubic(1 - merge.life / merge.ttl);
+      merge.rise = 0;
+      merge.total += tally.amount;
+      merge.text = tally.render(merge.total);
+      merge.life = merge.ttl;
+      return;
+    }
+
     // Oldest first, so dropping the head keeps the newest word — the one the
     // player is actually looking for — whatever else is in flight.
     if (floaters.length >= MAX_FLOATERS) floaters.shift();
 
-    const together =
-      clock - stackedAt < FLOAT_STACK_MS &&
-      Math.abs(spec.x - stackedX) < FLOAT_STACK_X;
     stackRung = together ? (stackRung + 1) % FLOAT_STACK_MAX : 0;
-    stackedAt = clock;
-    stackedX = spec.x;
 
     floaters.push({
       ...spec,
       y: spec.y - stackRung * spec.size * 1.15,
+      text: spec.text,
+      rise: spec.rise,
       life: spec.life,
       ttl: spec.life,
+      total: tally?.amount ?? 0,
     });
   };
 

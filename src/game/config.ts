@@ -140,9 +140,47 @@ export const START_TOKENS = START_BUDGET * 0.7;
 /** Tokens burned per world unit travelled. `used` is also the score. */
 export const DRAIN = 0.4;
 
-/** `speedFor` coefficients: speed is a monotonic function of budget alone. */
-export const SPEED_BASE = 260;
-export const SPEED_PER_BUDGET = 0.023;
+/**
+ * `speedFor` coefficients: speed is a monotonic function of budget alone, and
+ * a *saturating* one — quick off the mark, flattening toward a top end it
+ * approaches but never reaches.
+ *
+ *   speed(budget) = SPEED_MAX - (SPEED_MAX - SPEED_START) * e^(-SPEED_CURVE * (budget - START_BUDGET))
+ *
+ * It used to be the straight line `260 + 0.023 * budget`, which had no top end
+ * at all: a long clean run simply kept accelerating, and the only thing that
+ * ever stopped it was dying. Fine as an arcade rule, wrong as a difficulty
+ * ramp — the flattest stretch was the opening, where the player is still
+ * learning the jump and could most use the pressure, and the steepest was
+ * three minutes in, where they have already proved they can play and the game
+ * ran away from them at 700 units per second.
+ *
+ * The curve inverts that, and the three constants are picked so:
+ *
+ *   - The opening is untouched. SPEED_START is exactly what the old line gave
+ *     at START_BUDGET, so the first obstacle arrives when it always did, the
+ *     ~320ms window in the RUNNER_W note is still ~320ms, and the timings in
+ *     `scripts/shot-plan.ts` need no revision.
+ *   - The early ramp is ~1.5x steeper. Slope at the start is
+ *     SPEED_CURVE * (SPEED_MAX - SPEED_START) ≈ 0.035 per unit of ceiling,
+ *     against the old 0.023. Collecting everything, the speed the old line
+ *     reached at one minute now arrives at ~40s, and its two-minute speed at
+ *     ~85s.
+ *   - The top end is where it already was. The old line passed ~560 at about
+ *     two minutes of perfect play; SPEED_MAX is that number, and the curve
+ *     leans into it rather than through it.
+ *
+ * Every high token still makes the rest of the run faster — the curve is
+ * strictly increasing at every budget, and `spec/game.test.ts` sweeps for it —
+ * it just buys less speed the higher the ceiling already is. That is the trade
+ * the shape exists to make, and it costs the reward nothing: capacity is what
+ * keeps you alive, and it goes on being worth exactly as much late as early.
+ * Only the side effect tails off, and the side effect was the part that ended
+ * every long run.
+ */
+export const SPEED_START = 329;
+export const SPEED_MAX = 560;
+export const SPEED_CURVE = 0.00015;
 
 /** Distance between consecutive obstacles, sampled uniformly from this range. */
 export const SPAWN_GAP_MIN = 400;

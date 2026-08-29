@@ -38,8 +38,9 @@ import {
   RUNNER_X,
   SPAWN_GAP_MAX,
   SPAWN_GAP_MIN,
-  SPEED_BASE,
-  SPEED_PER_BUDGET,
+  SPEED_CURVE,
+  SPEED_MAX,
+  SPEED_START,
   START_BUDGET,
   START_TOKENS,
   TOKEN_CLEARANCE,
@@ -194,9 +195,22 @@ export function barLevel(state: GameState): BarLevel {
  * which is the whole design: pickups raise the ceiling, and raising the ceiling
  * is what makes the rest of the run faster. Every reward is also a difficulty
  * increase.
+ *
+ * The shape of that increase — steep at the start, easing toward `SPEED_MAX`
+ * without ever arriving — and why it is a curve rather than the line it used to
+ * be, are argued at the constants in `config.ts`.
+ *
+ * `budget` is anchored at `START_BUDGET` rather than at zero, so the exponent is
+ * the ceiling the player has *earned*. At the opening budget it is zero and the
+ * curve returns `SPEED_START` exactly, which is what the rest of the game's
+ * timings are measured against. Below the opening budget — a place no run
+ * reaches, since `budget` only ever rises — the exponent goes positive and the
+ * curve keeps rising monotonically through it, which is worth more than a clamp:
+ * a flat spot there would be a hole in the one property this function has.
  */
 export function speedFor(budget: number): number {
-  return SPEED_BASE + SPEED_PER_BUDGET * Math.max(0, budget);
+  const earned = Math.max(0, budget) - START_BUDGET;
+  return SPEED_MAX - (SPEED_MAX - SPEED_START) * Math.exp(-SPEED_CURVE * earned);
 }
 
 /** The runner's collision box, in absolute world coordinates. */
