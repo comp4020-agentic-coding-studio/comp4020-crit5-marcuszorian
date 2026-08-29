@@ -210,6 +210,23 @@ export function invulnerable(state: GameState): boolean {
 }
 
 /**
+ * How much of the shield is left, 0..1, for the small bar under the budget one.
+ * Zero whenever nothing is shielding, so the renderer's test for "draw it at
+ * all" and its test for "how wide" are the same number.
+ *
+ * Derived here rather than in the renderer for the same reason `barLevel` is:
+ * "the shield bar was still running when the runner survived the hit" is then a
+ * property a test can hold, instead of a claim about a canvas nobody can read.
+ * It falls at a fixed rate — INVULN_MS is a few seconds against a run of
+ * minutes — so the bar visibly empties, which is the point of drawing it.
+ */
+export function invulnFraction(state: GameState): number {
+  const left = state.invulnUntil - state.elapsed;
+  if (left <= 0) return 0;
+  return Math.min(1, left / (INVULN_MS / 1000));
+}
+
+/**
  * A pickup of `kind` with its left edge at world `x`. The one place a pickup's
  * geometry is decided, so the spawner, the renderer and the tests all agree
  * about what "a high token" is without any of them naming a number.
@@ -432,8 +449,8 @@ function spawn(state: GameState, distance: number): Spawned {
     seed = count.seed;
     // The first run is always the longest one, because it is the only place the
     // game gets to teach "gold is worth taking" before anything punishes you.
-    // A short run spans less track than one jump covers (6 tokens span 230
-    // units against a 207-unit airtime), so a player still mashing the button
+    // A short run spans less track than one jump covers (6 tokens span 252
+    // units against a ~228-unit airtime), so a player still mashing the button
     // sails over the whole thing and meets the first obstacle having collected
     // nothing — measured at 8% of seeds for a ~0.75s press cadence. The draw
     // above happens either way, so the seed sequence does not fork here.

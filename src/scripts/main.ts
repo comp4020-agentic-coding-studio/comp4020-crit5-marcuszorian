@@ -28,6 +28,7 @@ import {
   barLevel,
   createGame,
   grounded,
+  invulnFraction,
   invulnerable,
   step,
 } from "../game/rules.ts";
@@ -55,6 +56,21 @@ const HUD_FONT = 22;
 /** Base HUD margin and bar height, world units. Also scaled. */
 const HUD_MARGIN = 40;
 const HUD_BAR_H = 22;
+
+/**
+ * The shield bar: a short blue strip under the left end of the budget bar,
+ * emptying over the few seconds the power-up lasts.
+ *
+ * Deliberately a fraction of the budget bar's width and height. The budget bar
+ * is the run's clock and has to stay the biggest thing above the track; this one
+ * answers "how long have I got" for a state that lasts seconds, and a second
+ * full-width bar would read as an equal, which it is not. It sits at the left so
+ * it never reaches the score, which is right-aligned on the same line.
+ */
+const SHIELD_BAR_W = 0.22;
+const SHIELD_BAR_H = 0.36;
+/** Clear space between the budget bar's bottom edge and the shield bar's top. */
+const SHIELD_BAR_GAP = 8;
 
 // --- juice ------------------------------------------------------------------
 //
@@ -650,8 +666,9 @@ function drawRunner(
   state: GameState,
   view: View,
 ): void {
-  // The shield has no icon and no timer: the runner itself strobes in the
-  // power-up's colour, so the thing that changed is the thing you are watching.
+  // The runner itself strobes in the power-up's colour, so the thing that
+  // changed is the thing you are watching. The bar under the HUD says how much
+  // longer; this says that it is you it is happening to.
   const shielded =
     invulnerable(state) && Math.floor(view.now / SHIELD_FLASH_MS) % 2 === 0;
 
@@ -709,6 +726,8 @@ function drawBudget(
   paint.fillStyle = BAR_INK[barLevel(state)];
   paint.fillRect(margin, view.hudTop, width * fraction, height);
 
+  drawShield(paint, state, view, margin, width, height);
+
   paint.fillStyle = INK;
   paint.font = `600 ${HUD_FONT * view.hud}px ${MONO}`;
   paint.textAlign = "right";
@@ -718,6 +737,37 @@ function drawBudget(
     WORLD_W - margin,
     view.hudTop + height + 12 * view.hud,
   );
+}
+
+/**
+ * The shield's remaining time, under the budget bar. Present only while the
+ * shield is: the runner already strobes cyan, so this is the *duration* of a
+ * state the player can already see they are in, and leaving an empty track
+ * sitting there the rest of the run would be a permanent widget for a rare one.
+ *
+ * Same colour as the strobe and the power-up icon, because it is the same fact.
+ */
+function drawShield(
+  paint: CanvasRenderingContext2D,
+  state: GameState,
+  view: View,
+  margin: number,
+  barWidth: number,
+  barHeight: number,
+): void {
+  const fraction = invulnFraction(state);
+  if (fraction <= 0) return;
+
+  const width = barWidth * SHIELD_BAR_W;
+  const height = barHeight * SHIELD_BAR_H;
+  const top = view.hudTop + barHeight + SHIELD_BAR_GAP * view.hud;
+
+  // A dim track behind it, so what is left reads against what it was rather
+  // than as a blue strip of no particular length.
+  paint.fillStyle = DIM;
+  paint.fillRect(margin, top, width, height);
+  paint.fillStyle = SHIELD;
+  paint.fillRect(margin, top, width * fraction, height);
 }
 
 function drawEnding(

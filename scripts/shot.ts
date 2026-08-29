@@ -29,6 +29,10 @@ import { createServer } from "node:http";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { extname, join, normalize } from "node:path";
+// The shot list is a separate module so a test can replay it: see
+// `scripts/shot-plan.ts` and `spec/shot-plan.test.ts`.
+import { SHOTS } from "./shot-plan.ts";
+import type { Shot } from "./shot-plan.ts";
 
 const PREVIEW_PORT = 4331;
 const CDP_PORT = 9333;
@@ -41,37 +45,6 @@ const CDP_PORT = 9333;
 const PREFIX = "/comp4020-crit5-marcuszorian";
 const BASE = `http://127.0.0.1:${PREVIEW_PORT}${PREFIX}/`;
 const OUT = ".shots";
-
-/**
- * The card is a real frame of the game, at exactly the size a scraper wants.
- * dpr 1 on purpose: the file has to *be* 1200x630, and the frame is flat fills
- * and one number, so there is nothing for the extra pixels to resolve.
- */
-const CARD = { width: 1200, height: 630, dpr: 1 };
-
-interface Shot {
-  readonly name: string;
-  readonly width: number;
-  readonly height: number;
-  readonly dpr: number;
-  /** Milliseconds after load at which to press. Empty means never. */
-  readonly press: readonly number[];
-  /** Milliseconds after load at which to photograph. */
-  readonly at: number;
-}
-
-// The two marking viewports, idle and mid-run, plus an ending. The press
-// rhythms are hand-tuned against the opening stretch of track, which is fixed
-// by `FIRST_TOKEN_X` and `FIRST_OBSTACLE_X` and therefore the same every run.
-const SHOTS: readonly Shot[] = [
-  { name: "desktop-idle", width: 1920, height: 1080, dpr: 1, press: [], at: 700 },
-  { name: "desktop-run", width: 1920, height: 1080, dpr: 1, press: [200, 4300], at: 4600 },
-  { name: "desktop-over", width: 1920, height: 1080, dpr: 1, press: [200], at: 5200 },
-  { name: "phone-idle", width: 390, height: 844, dpr: 3, press: [], at: 700 },
-  { name: "phone-run", width: 390, height: 844, dpr: 3, press: [200, 4300], at: 4600 },
-  { name: "phone-over", width: 390, height: 844, dpr: 3, press: [200], at: 5200 },
-  { name: "card", ...CARD, press: [200, 4300], at: 4600 },
-];
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));

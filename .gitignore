@@ -2,6 +2,21 @@ node_modules/
 dist/
 *.log
 
+# Build output of looking at the game, not source. `pnpm shots` rewrites all of
+# it on every run, so committing it means a diff of seven binary PNGs on every
+# balance pass and a merge conflict nobody can read. Regenerate with
+# `pnpm shots` and open the files; that is what they are for.
+#
+# `public/card.png` is deliberately NOT here: it is the link-preview image the
+# deployed page points at, so it has to ship. `pnpm shots --card` promotes the
+# card frame into it, and that copy is a source asset.
+.shots/
+
+# Test output, same reasoning.
+coverage/
+test-results/
+*.tsbuildinfo
+
 # editor and OS junk
 .DS_Store
 ._*

@@ -56,11 +56,15 @@ export const GROUND_EPS = 1e-6;
 //   high    0.85 per 1000 units  x  140  =  0.119
 //   power   0.06 per 1000 units  x 1000  =  0.064
 //                                           -----
-//                                           0.427   vs DRAIN 0.35
+//                                           0.427   vs DRAIN 0.40
 //
-// A clean run therefore gains ~0.08 per unit and a 70% run loses ~0.05, which
-// is the window the design wants. Only playing settles whether it *feels* like
-// that window — step 13 is where these move.
+// A clean run therefore gains ~0.03 per unit and a 70% run loses ~0.10.
+//
+// Raised from the 0.35 the model was built at, after playing it: the game was
+// too forgiving, and the tighter window is the whole difference. Near-perfect
+// collection still stays ahead — it has to, or the budget never rises and the
+// run never accelerates — but only just, which is what keeps the bar the thing
+// you are watching rather than a meter that fills itself.
 //
 // The ground-token count is measured, not derived from the spacing above:
 // tokens that would land against an obstacle are dropped, which costs about a
@@ -71,10 +75,10 @@ export const GROUND_EPS = 1e-6;
 export const START_BUDGET = 3000;
 
 /** Tokens burned per world unit travelled. `used` is also the score. */
-export const DRAIN = 0.35;
+export const DRAIN = 0.4;
 
 /** `speedFor` coefficients: speed is a monotonic function of budget alone. */
-export const SPEED_BASE = 230;
+export const SPEED_BASE = 260;
 export const SPEED_PER_BUDGET = 0.023;
 
 /** Distance between consecutive obstacles, sampled uniformly from this range. */
@@ -150,7 +154,7 @@ export const INVULN_MS = 4000;
  */
 export const BOOST = 1000;
 
-/** Rare: one power-up every ~40–65 seconds at early-run speeds. */
+/** Rare: one power-up every ~35–60 seconds at early-run speeds. */
 export const POWER_GAP_MIN = 12000;
 export const POWER_GAP_MAX = 20000;
 
@@ -170,10 +174,10 @@ export const FIRST_OBSTACLE_X = 1500;
  * the runner's path. It is collected by accident, and the bar jumps — "these
  * are good" is taught before anything punishes you.
  *
- * Just past where the opening hop lands (207 units of track), so the press that
- * starts the game does not carry the runner over its own first lesson. The run
- * is also the longest the game spawns, which is what makes the lesson land at
- * every press rhythm rather than most of them.
+ * Just past where the opening hop lands (~228 units of track at the starting
+ * speed), so the press that starts the game does not carry the runner over its
+ * own first lesson. The run is also the longest the game spawns, which is what
+ * makes the lesson land at every press rhythm rather than most of them.
  */
 export const FIRST_TOKEN_X = 420;
 

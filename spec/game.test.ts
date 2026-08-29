@@ -23,6 +23,7 @@ import {
   barFraction,
   barLevel,
   createGame,
+  invulnFraction,
   invulnerable,
   nextRandom,
   pickupAt,
@@ -363,6 +364,37 @@ describe("the power-up", () => {
     expect(late.status).toBe("over");
     expect(late.cause).toBe("collision");
   });
+
+  // The shield bar under the HUD draws `invulnFraction` directly, so this is
+  // the readout: it is full the moment the power-up is taken, empty whenever
+  // nothing is shielding, and strictly falling in between. Sampled across the
+  // window rather than at picked instants, so it stays true if INVULN_MS moves.
+  it("reads full at pickup, empties as it expires, and is zero otherwise", () => {
+    const cold = quiet();
+    expect(invulnerable(cold)).toBe(false);
+    expect(invulnFraction(cold)).toBe(0);
+
+    const taken = play(
+      quiet({ pickups: [pickupAt("power", at(gap))] }),
+      contact + DT,
+    );
+    expect(invulnFraction(taken)).toBeCloseTo(1, 2);
+
+    let previous = invulnFraction(taken);
+    for (let t = invuln / 8; t <= invuln * 1.25; t += invuln / 8) {
+      const later = play(taken, t);
+      const now = invulnFraction(later);
+      expect({ t, falling: now < previous || now === 0 }).toEqual({
+        t,
+        falling: true,
+      });
+      expect(now).toBeGreaterThanOrEqual(0);
+      previous = now;
+    }
+    // Past the end of the window the bar is gone, not pinned at a sliver.
+    expect(previous).toBe(0);
+    expect(invulnerable(play(taken, invuln * 1.25))).toBe(false);
+  });
 });
 
 // The no-tutorial rule, in the two places it is mechanical. Whether the game
@@ -420,13 +452,16 @@ describe("teaching the game without words", () => {
   it("moves the bar when a token is collected", () => {
     // Below the cap, where the bar is not pinned: the pickup-to-bar link is
     // what teaches "gold is worth taking", so it has to be a visible step.
+    //
+    // The comparison is the same stretch of track with and without the token,
+    // not before-and-after: the bar is always draining, and whether one token
+    // out-earns half a second of DRAIN is a balance number that moves. What has
+    // to stay true is that taking it leaves you better off than not taking it.
     const drained = quiet({ used: START_BUDGET / 2 });
-    const before = barFraction(drained);
-    const taken = play(
-      { ...drained, pickups: [pickupAt("token", at(10))] },
-      0.5,
-    );
-    expect(barFraction(taken)).toBeGreaterThan(before);
+    const missed = play(drained, 0.5);
+    const taken = play({ ...drained, pickups: [pickupAt("token", at(10))] }, 0.5);
+    expect(taken.pickups).toHaveLength(0);
+    expect(barFraction(taken)).toBeGreaterThan(barFraction(missed));
   });
 });
 
