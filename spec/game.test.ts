@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   BOOST,
+  DRAIN_MAX,
+  DRAIN_START,
   GRAVITY,
   HIGH_TOKEN_H,
   HIGH_TOKEN_LEAD,
@@ -38,6 +40,7 @@ import {
   barFraction,
   barLevel,
   createGame,
+  drainFor,
   invulnFraction,
   invulnerable,
   nextRandom,
@@ -293,6 +296,39 @@ describe("speed", () => {
       });
       previous = gained;
     }
+  });
+});
+
+describe("drain", () => {
+  // The property the feature is for: the pool burns faster the longer a run
+  // goes on, whether or not the player is earning ceiling.
+  it("increases monotonically with elapsed time", () => {
+    for (let elapsed = 0; elapsed < 600; elapsed += 10) {
+      expect(drainFor(elapsed + 10)).toBeGreaterThan(drainFor(elapsed));
+    }
+  });
+
+  /**
+   * Load-bearing beyond this file the same way `speedFor(START_BUDGET)` is:
+   * every timing measured off the opening seconds — the "dying dry is
+   * legible" test among them — assumes the rate a fresh run opens at.
+   */
+  it("opens at the rate the rest of the game is timed against", () => {
+    expect(drainFor(0)).toBe(DRAIN_START);
+  });
+
+  /**
+   * The curve leans into `DRAIN_MAX` rather than through it, the same way
+   * `speedFor` leans into `SPEED_MAX` — a long run gets close, never past.
+   */
+  it("leans into a top end no run outlasts", () => {
+    for (const elapsed of [0, 60, 300, 1800]) {
+      expect({ elapsed, below: drainFor(elapsed) < DRAIN_MAX }).toEqual({
+        elapsed,
+        below: true,
+      });
+    }
+    expect(DRAIN_MAX - drainFor(1800)).toBeLessThan(0.001);
   });
 });
 

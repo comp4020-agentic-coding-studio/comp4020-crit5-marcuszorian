@@ -12,7 +12,9 @@ import {
   BAR_CRIT,
   BAR_WARN,
   BOOST,
-  DRAIN,
+  DRAIN_CURVE,
+  DRAIN_MAX,
+  DRAIN_START,
   FIRST_OBSTACLE_X,
   FIRST_POWER_X,
   FIRST_TOKEN_X,
@@ -213,6 +215,19 @@ export function speedFor(budget: number): number {
   return SPEED_MAX - (SPEED_MAX - SPEED_START) * Math.exp(-SPEED_CURVE * earned);
 }
 
+/**
+ * Tokens burned per world unit travelled, as a function of seconds elapsed.
+ * Same saturating shape as `speedFor`, but on the clock rather than the
+ * ceiling: it opens at `DRAIN_START` — so nothing about the opening seconds
+ * changes — and eases toward `DRAIN_MAX` the longer the run goes on, whether
+ * or not the player is earning ceiling. Why the target sits above a clean
+ * run's income is argued at the constants in `config.ts`.
+ */
+export function drainFor(elapsed: number): number {
+  const t = Math.max(0, elapsed);
+  return DRAIN_MAX - (DRAIN_MAX - DRAIN_START) * Math.exp(-DRAIN_CURVE * t);
+}
+
 /** The runner's collision box, in absolute world coordinates. */
 export function runnerBox(state: GameState): Box {
   return {
@@ -328,7 +343,8 @@ export function pickupValue(kind: PickupKind): number {
  * high token is a bet on being able to earn against it later, and it is dead
  * weight to a player who is not collecting. Which is exactly the decision the
  * layout exists to pose — and it only works because ground tokens out-earn
- * `DRAIN`, so a clean run really does press against the ceiling.
+ * `drainFor` early on, so a clean run really does press against the ceiling
+ * before the ramp makes that stop being true.
  *
  * The power-up is the deliberate exception and reads as one *because* the rule
  * is otherwise strict — it raises the ceiling and then fills the pool to it. See
@@ -434,7 +450,7 @@ function advance(state: GameState, input: Input, dt: number): GameState {
   }
 
   const distance = state.distance + travelled;
-  const spent = travelled * DRAIN;
+  const spent = travelled * drainFor(state.elapsed);
 
   const moved: GameState = {
     ...state,
@@ -491,7 +507,7 @@ function advance(state: GameState, input: Input, dt: number): GameState {
  * nothing else — it hands you no tokens at all, it hands you somewhere to put
  * them. Which is why the ceiling is only worth raising when the pool is pressing
  * against it, and why the pool can only press against it if ground tokens
- * out-earn `DRAIN`. See the economy note in config.
+ * out-earn `drainFor`. See the economy note in config.
  *
  * Order matters where the two meet. The ceiling is raised first, so a power-up's
  * fill goes to the *new* ceiling and a ground token taken on the same frame as a

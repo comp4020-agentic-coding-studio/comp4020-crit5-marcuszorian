@@ -73,22 +73,24 @@ export const GROUND_EPS = 1e-6;
 //
 // Making them exclusive costs something, and the cost has to be paid here.
 // Capacity you cannot fill is worth nothing — so if ground tokens alone do not
-// out-earn `DRAIN`, the pool can never reach the ceiling, and a high token is a
-// bigger container for water that never arrives. The whole split rests on
-// ground income clearing drain on a clean run.
+// out-earn drain early on, the pool can never reach the ceiling, and a high
+// token is a bigger container for water that never arrives. The whole split
+// rests on ground income clearing drain at the *opening* rate.
 //
 // Speed cancels out of the income and drain rates alike (both scale with it),
-// so the only dial that matters is income per world unit against `DRAIN`,
-// weighted by how much a player actually collects. Target: collecting nearly
-// all of it is net positive, collecting ~70% is net negative, so the bar always
-// matters and skill is what keeps you alive.
+// so early on the only dial that matters is income per world unit against
+// `DRAIN_START`, weighted by how much a player actually collects. Target:
+// collecting nearly all of it is net positive, collecting ~70% is net
+// negative, so the bar always matters and skill is what keeps you alive.
+// Later in a run that stops being true on purpose — see `drainFor` below.
 //
 // Pool income per world unit at full collection, measured off the spawner over
 // 3.6M units of track rather than estimated:
 //
-//   ground  4.06 per 1000 units  x  120  =  0.487   vs DRAIN 0.40
+//   ground  4.06 per 1000 units  x  120  =  0.487   vs DRAIN_START 0.40
 //
-// A clean run gains ~0.09 per unit; a 70% run earns 0.341 and loses ~0.06.
+// A clean run gains ~0.09 per unit early on; a 70% run earns 0.341 and loses
+// ~0.06 from the opening rate alone.
 // `TOKEN_VALUE` doubled from 60 to 120 to get there, and it had to: under the
 // exclusive rule the ground token is the *only* thing paying into the pool,
 // where before it carried a third of the load.
@@ -137,8 +139,32 @@ export const START_BUDGET = 3000;
  */
 export const START_TOKENS = START_BUDGET * 0.7;
 
-/** Tokens burned per world unit travelled. `used` is also the score. */
-export const DRAIN = 0.4;
+/**
+ * `drainFor` coefficients: how many tokens burn per world unit travelled, as a
+ * function of `elapsed` — seconds since the run started — rather than a flat
+ * number. Same shape as `speedFor`: it opens at `DRAIN_START` and eases toward
+ * `DRAIN_MAX` without ever reaching it, so the earliest seconds are untouched
+ * (every timing measured off the old flat 0.4 still holds) and the pressure
+ * builds the longer a run goes on, independent of how well it's being played.
+ *
+ *   drain(elapsed) = DRAIN_MAX - (DRAIN_MAX - DRAIN_START) * e^(-DRAIN_CURVE * elapsed)
+ *
+ * The old flat rate was 0.4 against a full-collection income of 0.487 per
+ * world unit (see the economy note above), so a clean run's pool always crept
+ * upward and only a jump for more ceiling ever changed that. `DRAIN_MAX` is
+ * set above that income on purpose: late enough in any run, even one that
+ * collects everything, the pool starts losing ground — the ramp is what
+ * guarantees a run ends from time pressure alone rather than only from a
+ * missed pickup or a bad jump.
+ *
+ * `DRAIN_CURVE` is picked so the ramp is barely felt in the opening run — at
+ * 15s (roughly what "dying dry is legible" burns through on an empty track)
+ * it has moved only a little past `DRAIN_START` — and is well underway by the
+ * one- to two-minute mark, the same stretch `SPEED_CURVE` targets.
+ */
+export const DRAIN_START = 0.4;
+export const DRAIN_MAX = 0.9;
+export const DRAIN_CURVE = 0.013;
 
 /**
  * `speedFor` coefficients: speed is a monotonic function of budget alone, and
@@ -161,14 +187,32 @@ export const DRAIN = 0.4;
  *     at START_BUDGET, so the first obstacle arrives when it always did, the
  *     ~320ms window in the RUNNER_W note is still ~320ms, and the timings in
  *     `scripts/shot-plan.ts` need no revision.
- *   - The early ramp is ~1.5x steeper. Slope at the start is
- *     SPEED_CURVE * (SPEED_MAX - SPEED_START) ≈ 0.035 per unit of ceiling,
- *     against the old 0.023. Collecting everything, the speed the old line
- *     reached at one minute now arrives at ~40s, and its two-minute speed at
- *     ~85s.
- *   - The top end is where it already was. The old line passed ~560 at about
+ *   - The early ramp is 1.5x steeper. Slope at the start is
+ *     SPEED_CURVE * (SPEED_MAX - SPEED_START) = 0.0347 per unit of ceiling,
+ *     against the old 0.023.
+ *   - The top end is where it already was. The old line passed 560 at about
  *     two minutes of perfect play; SPEED_MAX is that number, and the curve
  *     leans into it rather than through it.
+ *
+ * What that comes to in time is worth writing down, because the slope figure
+ * flatters it and the difference is the whole reason to prefer a curve. Speed
+ * against seconds, collecting everything (integrated at the 0.183 ceiling per
+ * world unit the economy note above measures):
+ *
+ *          30s   60s   90s  120s  180s
+ *   old    373   424   481   545   702
+ *   new    388   438   476   504   536
+ *
+ * So the first ~75 seconds are faster — modestly, because concavity starts
+ * eating the 1.5x almost immediately — and everything after that is slower than
+ * the line would have been, which is what "the same top end" buys. The old
+ * three-minute run was at 702 and nobody was playing it; this one is still at
+ * 536 and still gaining.
+ *
+ * The dial for the first half of that table is SPEED_CURVE alone, and it is
+ * steeper than it looks: 1.8e-4 pulls the old one-minute speed back to ~42s,
+ * 2.5e-4 to ~31s, at the cost of a flatter middle as the curve meets its
+ * ceiling sooner. SPEED_MAX moves the second half.
  *
  * Every high token still makes the rest of the run faster — the curve is
  * strictly increasing at every budget, and `spec/game.test.ts` sweeps for it —
